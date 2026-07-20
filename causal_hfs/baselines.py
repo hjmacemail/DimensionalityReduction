@@ -165,11 +165,13 @@ class LASSOMethod(BaseMethod):
         Xp = self._pre.fit_transform(X)
         k = min(self.k, Xp.shape[1])
         if self.discrete_target:
-            model = LogisticRegression(
-                penalty="l1", solver="liblinear", C=1.0,
-                random_state=self.random_state, max_iter=500,
-            ).fit(Xp, y)
-            coef = np.abs(model.coef_).sum(axis=0)
+            # One-vs-rest keeps the fast L1 liblinear solver working for multiclass
+            # targets (newer scikit-learn raises instead of doing OvR implicitly).
+            from sklearn.multiclass import OneVsRestClassifier
+            base = LogisticRegression(penalty="l1", solver="liblinear", C=1.0,
+                                      random_state=self.random_state, max_iter=500)
+            model = OneVsRestClassifier(base).fit(Xp, y)
+            coef = np.abs(np.vstack([est.coef_.ravel() for est in model.estimators_])).sum(axis=0)
         else:
             model = Lasso(alpha=0.01, random_state=self.random_state, max_iter=2000).fit(Xp, y)
             coef = np.abs(model.coef_)
