@@ -726,11 +726,12 @@ with tab_exp:
         st.info("Choose datasets on the left and click **Run experiment**.")
     else:
         methods_used = [m for m in METHOD_ORDER if m in df["method"].unique()]
-        n_ds = df["dataset"].nunique()
+        ds_names = list(df["dataset"].unique())
+        n_ds = len(ds_names)
         nseeds = df["seed"].nunique() if "seed" in df.columns else 1
         st.success(
             f"Ran **{n_ds} dataset(s) × {len(methods_used)} methods × {nseeds} seed(s)** "
-            f"in {meta['secs']:.1f}s.")
+            f"in {meta['secs']:.1f}s  ·  datasets: **{', '.join(ds_names)}**.")
         for disp, err in meta["skipped"]:
             st.warning(f"Skipped **{disp}** — {err}")
 
@@ -777,12 +778,22 @@ with tab_exp:
             ["📊 Overview", "📈 Charts", "🗂 Per-dataset", "🎯 Causal", "⬇ Export"])
 
         with ov:
+            if n_ds == 1:
+                _scope = f"Results for **{ds_names[0]}**."
+            else:
+                _scope = (f"📊 These tables are **averaged across all {n_ds} selected "
+                          f"datasets** ({', '.join(ds_names)}). For a per-dataset breakdown, "
+                          f"open the **🗂 Per-dataset** sub-tab.")
+            st.info(_scope)
             st.markdown("**Best per metric** — " + "; ".join(bullets) + ".")
             if "Proposed" in pareto:
                 st.success(f"**Proposed is Pareto-optimal** on accuracy vs. stability "
                            f"(non-dominated: {', '.join(pareto)}).")
             else:
                 st.info(f"Pareto-optimal (accuracy vs. stability): {', '.join(pareto)}.")
+            hdr = (f"#### Mean ± std over {n_ds} datasets" if n_ds > 1
+                   else f"#### Metrics — {ds_names[0]}")
+            st.markdown(hdr)
             disp_mean = mean_full[sel_labels]
             st.markdown(render_table(disp_mean, best_per_column_mask(disp_mean),
                                      proposed_row="Proposed", display=text_full[sel_labels]),
@@ -830,13 +841,28 @@ with tab_exp:
                             st.info("Causal metrics need a ground-truth dataset (synthetic only).")
 
         with ds_tab:
+            # Plain per-dataset tables: one block per dataset (methods × metrics).
+            st.markdown("#### Per-dataset results")
+            st.caption("One table per dataset · green = best method per metric · "
+                       "Proposed row tinted blue.")
+            for d in ds_names:
+                sub = (per_ds[per_ds["dataset"] == d].set_index("method")
+                       .reindex(methods_used)[selected_metrics])
+                sub.columns = [METRIC_LABELS[m] for m in selected_metrics]
+                sub.index.name = "method"
+                with st.expander(f"📄 {d}", expanded=(n_ds <= 3)):
+                    st.markdown(render_table(sub, best_per_column_mask(sub),
+                                             proposed_row="Proposed"), unsafe_allow_html=True)
+
             if n_ds < 2:
-                st.info("Run on 2+ datasets to see per-dataset heatmaps and significance tests.")
+                st.caption("Select 2+ datasets to also see the heatmap and significance tests.")
             else:
+                st.markdown("#### Heatmap")
                 hm_metric = st.selectbox("Metric", selected_metrics,
                                          format_func=lambda m: METRIC_LABELS[m], key="hm_metric")
                 st.pyplot(metric_heatmap(per_ds, hm_metric), use_container_width=False)
                 if n_ds >= 3 and "Proposed" in methods_used:
+                    st.markdown("#### Statistical significance")
                     acc_mat = per_ds.pivot(index="dataset", columns="method", values="accuracy")[methods_used]
                     stab_mat = per_ds.pivot(index="dataset", columns="method", values="stability")[methods_used]
                     fa, pa = friedman_test(acc_mat.to_numpy())
