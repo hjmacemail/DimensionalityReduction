@@ -1,0 +1,41 @@
+dataset,method,accuracy,stability,trustworthiness,runtime_s
+Wine,Proposed,0.921,0.801,0.988,0.194
+Wine,PCA,0.966,0.853,0.997,0.001
+Wine,VAE,0.966,0.853,0.997,0.002
+Wine,LASSO,0.966,0.844,0.974,0.002
+Wine,mRMR,0.972,0.857,0.96,0.013
+Wine,CausalDRIFT,0.977,0.955,0.961,0.028
+Wine,CAFE,0.983,0.91,0.973,0.029
+Wine,Random,0.944,0.604,0.983,0.001
+Breast Cancer,Proposed,0.943,0.45,0.965,0.758
+Breast Cancer,PCA,0.97,0.774,0.999,0.002
+Breast Cancer,VAE,0.97,0.774,0.999,0.003
+Breast Cancer,LASSO,0.967,0.419,0.974,0.003
+Breast Cancer,mRMR,0.96,0.468,0.932,0.032
+Breast Cancer,CausalDRIFT,0.948,0.386,0.956,0.112
+Breast Cancer,CAFE,0.955,0.346,0.959,0.113
+Breast Cancer,Random,0.95,0.215,0.969,0.002
+Synthetic-A,Proposed,0.68,0.302,0.835,0.548
+Synthetic-A,PCA,0.793,0.456,0.941,0.002
+Synthetic-A,VAE,0.815,0.47,0.94,0.003
+Synthetic-A,LASSO,0.89,0.482,0.89,0.008
+Synthetic-A,mRMR,0.925,0.376,0.902,0.033
+Synthetic-A,CausalDRIFT,0.938,0.634,0.887,0.075
+Synthetic-A,CAFE,0.938,0.538,0.887,0.077
+Synthetic-A,Random,0.74,0.215,0.871,0.002
+Synthetic-B,Proposed,0.507,0.299,0.88,0.544
+Synthetic-B,PCA,0.642,0.295,0.934,0.002
+Synthetic-B,VAE,0.622,0.309,0.936,0.003
+Synthetic-B,LASSO,0.758,0.55,0.88,0.015
+Synthetic-B,mRMR,0.75,0.378,0.889,0.037
+Synthetic-B,CausalDRIFT,0.82,0.567,0.838,0.073
+Synthetic-B,CAFE,0.767,0.477,0.861,0.073
+Synthetic-B,Random,0.487,0.215,0.871,0.002
+Digits,Proposed,0.797,0.374,0.964,0.702
+Digits,PCA,0.934,0.491,0.997,0.002
+Digits,VAE,0.934,0.491,0.997,0.003
+Digits,LASSO,0.851,0.568,0.971,0.014
+Digits,mRMR,0.874,0.435,0.972,0.061
+Digits,CausalDRIFT,0.791,0.33,0.962,0.106
+Digits,CAFE,0.829,0.334,0.973,0.106
+Digits,Random,0.837,0.301,0.965,0.002

@@ -1,0 +1,10 @@
+method,accuracy,stability,causal_plausibility,causal_recall
+Proposed (improved causal),0.893,0.521,0.833,1.000
+Proposed (soft/default),0.703,0.209,0.083,0.100
+PCA,0.895,0.378,0.611,0.733
+VAE,0.895,0.378,0.611,0.733
+LASSO,0.903,0.463,0.667,0.800
+mRMR,0.903,0.234,0.000,0.000
+CausalDRIFT,0.878,0.334,0.056,0.067
+CAFE,0.900,0.275,0.167,0.200
+Random,0.707,0.184,0.167,0.200
