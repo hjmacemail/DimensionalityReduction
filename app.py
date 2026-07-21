@@ -615,11 +615,12 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                     wrapper_refine=accuracy_refine, prefilter_top=150,
                     lam=0.7, alpha=0.4))
             # Soft mode (default for real data): all features → clustering →
-            # consensus, using the FULL bootstrap budget for a stable selection.
+            # consensus, using the FULL bootstrap budget for a stable selection and
+            # Random-Forest importance to pick the most predictive representatives.
             return CausalHFS(FrameworkConfig(
                 n_representatives=kk, n_bootstrap=max(8, n_bootstrap),
-                random_state=seed, mb_max_cond_set=3, wrapper_refine=accuracy_refine,
-                prefilter_top=150))
+                random_state=seed, mb_max_cond_set=3, rf_relevance=True,
+                wrapper_refine=accuracy_refine, prefilter_top=150))
 
         wide = "  ·  high-dim, please wait" if X.shape[1] > 200 else ""
         for si in range(n_seeds):

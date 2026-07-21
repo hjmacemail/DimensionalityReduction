@@ -179,6 +179,7 @@ class CausalHFS:
             random_state=cfg.random_state,
             use_conditional=cfg.conditional_relevance,
             cond_max_set=cfg.cond_max_set,
+            rf_relevance=cfg.rf_relevance,
         ).fit(Xp, y, lam=cfg.lam)
         R = analyzer.relevance_
         mi = analyzer.mi_
@@ -330,6 +331,14 @@ class CausalHFS:
             self.stability_ = 1.0
             return self
 
+        # Consensus clustering (co-association) — a more stable alternative to
+        # re-clustering + voting on exact indices each resample.
+        if cfg.consensus_clustering and self.candidate_features_:
+            self._consensus_clustering_fit(X, y, k)
+            if cfg.wrapper_refine:
+                self.selected_features_ = self._wrapper_refine(X, y, self.selected_features_)
+            return self
+
         # Stage 7 - bootstrap consensus
         rng = np.random.default_rng(cfg.random_state)
         n = X.shape[0]
@@ -405,6 +414,56 @@ class CausalHFS:
                     if s > best + 1e-9:
                         selected, best, improved = trial, s, True
         return sorted(set(selected))
+
+    def _consensus_clustering_fit(self, X, y, k):
+        """Co-association consensus clustering (Monti-style) for a stable partition.
+
+        Over the FIXED candidate feature set, accumulate how often each feature pair
+        lands in the same cluster across bootstrap resamples, then cluster once on the
+        averaged co-association matrix. Averaging removes per-resample clustering
+        noise, so the final partition (and its representatives) is far more stable.
+        """
+        cand = np.array(self.candidate_features_, dtype=int)
+        R = self.relevance_
+        R_c = R[cand]
+        p_c = len(cand)
+        k_eff = int(min(k, p_c))
+        rng = np.random.default_rng(self.config.random_state)
+        n = X.shape[0]
+
+        coassoc = np.zeros((p_c, p_c))
+        for _ in range(self.config.n_bootstrap):
+            idx = rng.integers(0, n, size=n)
+            Xb = Preprocessor().fit_transform(X[idx])[:, cand]
+            D = hybrid_distance(Xb, R_c, alpha=self.config.alpha,
+                                enable_causal=self.config.enable_causal)
+            labels = average_linkage_labels(D, k_eff)
+            coassoc += (labels[:, None] == labels[None, :]).astype(float)
+        coassoc /= max(1, self.config.n_bootstrap)
+
+        Dco = 1.0 - coassoc
+        np.fill_diagonal(Dco, 0.0)
+        cons_labels = average_linkage_labels(Dco, k_eff)
+        clusters = {}
+        for i, lab in enumerate(cons_labels):
+            clusters.setdefault(int(lab), []).append(i)
+
+        reps_local = select_representatives(clusters, R_c)
+        self.selected_features_ = sorted(int(cand[i]) for i in reps_local)
+
+        # Report the mean within-cluster co-association as a partition-stability score.
+        within = []
+        for members in clusters.values():
+            if len(members) > 1:
+                sub = coassoc[np.ix_(members, members)]
+                within.append(sub[np.triu_indices(len(members), 1)].mean())
+        self.stability_ = float(np.mean(within)) if within else 1.0
+        self._log("7. Consensus clustering",
+                  f"Averaged co-association over {self.config.n_bootstrap} bootstraps; "
+                  f"partition stability {self.stability_:.3f}. "
+                  f"Final subset: {self.selected_features_}.",
+                  stability=float(self.stability_), selected=list(self.selected_features_))
+        return self
 
     def transform(self, X: np.ndarray, standardize: bool = True) -> np.ndarray:
         """Project ``X`` onto the selected representative features.

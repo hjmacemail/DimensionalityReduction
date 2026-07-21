@@ -185,18 +185,34 @@ def conditional_relevance_scores(
     return sc / m if m > 0 else sc
 
 
+def rf_relevance_scores(X: np.ndarray, y: np.ndarray, discrete_target: bool = True,
+                        random_state: int = 0, n_estimators: int = 100) -> np.ndarray:
+    """Random-Forest feature importance, normalised to ``[0, 1]`` (supervised, non-linear)."""
+    if discrete_target:
+        from sklearn.ensemble import RandomForestClassifier
+        est = RandomForestClassifier(n_estimators=n_estimators, random_state=random_state)
+    else:
+        from sklearn.ensemble import RandomForestRegressor
+        est = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state)
+    imp = np.asarray(est.fit(X, y).feature_importances_, dtype=float)
+    m = imp.max()
+    return imp / m if m > 0 else imp
+
+
 class CausalAnalyzer:
     """Convenience wrapper computing MB, MI and the relevance vector ``R``."""
 
     def __init__(self, alpha: float = 0.05, max_cond_set: int = 3,
                  discrete_target: bool = True, random_state: int = 0,
-                 use_conditional: bool = False, cond_max_set: int = 12) -> None:
+                 use_conditional: bool = False, cond_max_set: int = 12,
+                 rf_relevance: bool = False) -> None:
         self.alpha = alpha
         self.max_cond_set = max_cond_set
         self.discrete_target = discrete_target
         self.random_state = random_state
         self.use_conditional = use_conditional
         self.cond_max_set = cond_max_set
+        self.rf_relevance = rf_relevance
         self.mb_: List[int] = []
         self.mb_mask_: np.ndarray | None = None
         self.mi_: np.ndarray | None = None
@@ -211,7 +227,10 @@ class CausalAnalyzer:
         mask[self.mb_] = 1.0
         self.mb_mask_ = mask
         self.mi_ = mutual_information(X, y, self.discrete_target, self.random_state)
-        if self.use_conditional:
+        if self.rf_relevance:
+            self.cond_rel_ = rf_relevance_scores(X, y, self.discrete_target, self.random_state)
+            self.predictive_ = self.cond_rel_
+        elif self.use_conditional:
             self.cond_rel_ = conditional_relevance_scores(X, y, self.cond_max_set)
             self.predictive_ = self.cond_rel_
         else:

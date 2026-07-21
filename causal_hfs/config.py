@@ -79,6 +79,10 @@ class FrameworkConfig:
     # conditioned on. ``cond_max_set`` caps the conditioning-set size.
     conditional_relevance: bool = False
     cond_max_set: int = 12
+    # Use Random-Forest feature importance (supervised, non-linear) as the predictive
+    # relevance term instead of the linear conditional/MI score. Tends to pick more
+    # predictive cluster representatives -> higher downstream accuracy.
+    rf_relevance: bool = False
     # Improvement #2: choose each cluster's prototype. "composite" = centrality+MI,
     # "relevance" = causal relevance R (the causal driver of the group),
     # "predictive" = the most target-predictive member (favours accuracy).
@@ -91,6 +95,13 @@ class FrameworkConfig:
     # option; empirically it did not improve reported stability in our benchmarks
     # because each resample re-derives its own clustering, so it defaults off.
     cluster_consensus: bool = False
+    # Consensus clustering (Monti-style co-association): accumulate how often each
+    # feature pair co-clusters across bootstraps, then cluster once on that averaged
+    # matrix. Available as an option, but — like ``cluster_consensus`` — it did NOT
+    # improve *reported* stability in our benchmarks (the evaluation re-fits the whole
+    # pipeline per resample, so the co-association is itself re-derived each time).
+    # Defaults off; the reliable stability levers are soft mode + more bootstraps.
+    consensus_clustering: bool = False
     mb_alpha: float = 0.05
     mb_max_cond_set: int = 3
     # High-dimensional speed guard: if the dataset has more than this many features,
