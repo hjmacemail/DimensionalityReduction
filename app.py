@@ -577,6 +577,19 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
     loaded, skipped = [], []
     total = max(1, len(selected) * len(methods) * n_seeds)
     done = 0
+    start = time.perf_counter()
+
+    def _fmt_t(s):
+        s = int(max(0, s))
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _label(base, overall_frac):
+        el = time.perf_counter() - start
+        bits = [base, f"elapsed {_fmt_t(el)}"]
+        if overall_frac > 0.02:
+            bits.append(f"ETA ~{_fmt_t(el / overall_frac - el)}")
+        return "  ·  ".join(bits)
+
     for disp in selected:
         try:
             X, y, names, ncls, real_name, true_relevant = load_catalogue_dataset(disp)
@@ -608,13 +621,14 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                 random_state=seed, mb_max_cond_set=3, wrapper_refine=accuracy_refine,
                 prefilter_top=150))
 
-        wide = " · high-dim, please wait" if X.shape[1] > 200 else ""
+        wide = "  ·  high-dim, please wait" if X.shape[1] > 200 else ""
         for si in range(n_seeds):
             seed = base_seed + si
             for m in methods:
-                label = f"{real_name} ({X.shape[1]}d) · {m} · seed {seed}{wide}"
+                base = (f"{real_name} ({X.shape[1]}d) · {m} · seed {seed}  ·  "
+                        f"fit {done + 1}/{total}{wide}")
                 if progress:
-                    progress.progress(min(1.0, done / total), text=label)
+                    progress.progress(min(1.0, done / total), text=_label(base, done / total))
                 if m == "Proposed":
                     bf = (lambda sd: prop_build_factory(sd))
                 else:
@@ -622,9 +636,10 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
 
                 # Sub-progress within this single method so the bar keeps moving
                 # even for a slow high-dimensional fit.
-                def _sub(frac, _done=done, _label=label):
+                def _sub(frac, _done=done, _base=base):
                     if progress:
-                        progress.progress(min(1.0, (_done + frac) / total), text=_label)
+                        of = (_done + frac) / total
+                        progress.progress(min(1.0, of), text=_label(_base, of))
 
                 r = evaluate_method(m, bf, X, y, kk, n_bootstrap=n_bootstrap,
                                     random_state=seed, true_relevant=true_relevant,
@@ -638,7 +653,7 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                 })
                 done += 1
     if progress:
-        progress.progress(1.0, text="Done")
+        progress.progress(1.0, text=f"Done — {total} fits in {_fmt_t(time.perf_counter() - start)}")
     return pd.DataFrame(rows), loaded, skipped
 
 
