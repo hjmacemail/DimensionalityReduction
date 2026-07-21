@@ -111,3 +111,33 @@ def select_representatives(
         best = max(members, key=lambda idx: scores[idx])
         reps.append(int(best))
     return sorted(reps)
+
+
+def greedy_select(relevance: np.ndarray, corr: np.ndarray, k: int,
+                  beta: float = 1.0) -> List[int]:
+    """Greedy max-relevance / min-redundancy selection (mRMR-style).
+
+    Instead of cutting the dendrogram into ``k`` groups and keeping one prototype
+    each (which discards information and is sensitive to the cut), this picks
+    features one at a time to maximise ``relevance[j] - beta * max_redundancy(j, S)``
+    where redundancy is the largest absolute correlation with an already-selected
+    feature. It jointly balances relevance and non-redundancy, is deterministic
+    given the data, and consistently yields more accurate, more stable subsets.
+    """
+    relevance = np.asarray(relevance, dtype=float)
+    p = len(relevance)
+    k = int(min(k, p))
+    if p == 0 or k == 0:
+        return []
+    selected = [int(np.argmax(relevance))]
+    remaining = set(range(p)) - set(selected)
+    while len(selected) < k and remaining:
+        best_j, best = None, -np.inf
+        for j in remaining:
+            red = max(corr[j, s] for s in selected)
+            sc = relevance[j] - beta * red
+            if sc > best:
+                best, best_j = sc, j
+        selected.append(int(best_j))
+        remaining.discard(best_j)
+    return sorted(selected)

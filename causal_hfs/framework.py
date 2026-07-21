@@ -25,8 +25,10 @@ from .clustering import (
     agglomerate,
     average_linkage_labels,
     composite_score,
+    greedy_select,
     select_representatives,
 )
+from .graph import correlation_matrix
 from .consensus import (
     cluster_consensus_selection,
     consensus_selection,
@@ -255,13 +257,17 @@ class CausalHFS:
         # Stage 6 - prototype selection, then map local indices back to originals.
         # ``prototype_by="relevance"`` picks the most causally-relevant cluster
         # member (Improvement #2); the default composite also weights centrality/MI.
-        if cfg.prototype_by == "relevance":
-            score_vec = R_c
+        if cfg.prototype_by == "greedy":
+            # Greedy max-relevance / min-redundancy (mRMR-style) over candidates.
+            C_c = correlation_matrix(Xp_c)
+            reps_local = greedy_select(pred_c, C_c, k_eff, cfg.redundancy_beta)
+        elif cfg.prototype_by == "relevance":
+            reps_local = select_representatives(result.clusters, R_c)
         elif cfg.prototype_by == "predictive":
-            score_vec = pred_c            # most target-predictive member (accuracy)
+            reps_local = select_representatives(result.clusters, pred_c)
         else:
             score_vec = composite_score(centrality_c, R_c, pred_c, cfg.beta)
-        reps_local = select_representatives(result.clusters, score_vec)
+            reps_local = select_representatives(result.clusters, score_vec)
         # Map: local cluster index -> working (prefiltered) index -> original index.
         reps = sorted(int(pf[cand[i]]) for i in reps_local)
         if record:

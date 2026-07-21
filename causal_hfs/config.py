@@ -83,10 +83,13 @@ class FrameworkConfig:
     # relevance term instead of the linear conditional/MI score. Tends to pick more
     # predictive cluster representatives -> higher downstream accuracy.
     rf_relevance: bool = False
-    # Improvement #2: choose each cluster's prototype. "composite" = centrality+MI,
-    # "relevance" = causal relevance R (the causal driver of the group),
-    # "predictive" = the most target-predictive member (favours accuracy).
+    # Selection strategy. "composite"/"relevance"/"predictive" cut the dendrogram
+    # into k clusters and keep one prototype each. "greedy" instead runs a
+    # max-relevance / min-redundancy (mRMR-style) greedy selection over the
+    # candidate features — deterministic, more accurate and more stable in practice.
     prototype_by: str = "composite"
+    # Redundancy penalty weight for the greedy selection (``prototype_by="greedy"``).
+    redundancy_beta: float = 1.0
     # Optional accuracy booster: a light forward-swap wrapper over the downstream
     # KNN score, run once on full data after consensus (filter -> wrapper hybrid).
     # Raises accuracy ~2-3% but can reduce selection stability; default off.
