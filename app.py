@@ -601,23 +601,34 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                     conditional_relevance=True, prototype_by="relevance",
                     wrapper_refine=accuracy_refine, prefilter_top=150,
                     lam=0.7, alpha=0.4))
+            # Soft mode (default for real data): all features → clustering →
+            # consensus, using the FULL bootstrap budget for a stable selection.
             return CausalHFS(FrameworkConfig(
-                n_representatives=kk, n_bootstrap=max(4, n_bootstrap // 2),
-                random_state=seed, mb_max_cond_set=2, wrapper_refine=accuracy_refine,
+                n_representatives=kk, n_bootstrap=max(8, n_bootstrap),
+                random_state=seed, mb_max_cond_set=3, wrapper_refine=accuracy_refine,
                 prefilter_top=150))
 
+        wide = " · high-dim, please wait" if X.shape[1] > 200 else ""
         for si in range(n_seeds):
             seed = base_seed + si
             for m in methods:
+                label = f"{real_name} ({X.shape[1]}d) · {m} · seed {seed}{wide}"
                 if progress:
-                    progress.progress(min(1.0, done / total),
-                                      text=f"{real_name} · {m} · seed {seed}")
+                    progress.progress(min(1.0, done / total), text=label)
                 if m == "Proposed":
                     bf = (lambda sd: prop_build_factory(sd))
                 else:
                     bf = (lambda nm: (lambda sd: build_baseline(nm, k=kk, random_state=sd)))(m)
+
+                # Sub-progress within this single method so the bar keeps moving
+                # even for a slow high-dimensional fit.
+                def _sub(frac, _done=done, _label=label):
+                    if progress:
+                        progress.progress(min(1.0, (_done + frac) / total), text=_label)
+
                 r = evaluate_method(m, bf, X, y, kk, n_bootstrap=n_bootstrap,
-                                    random_state=seed, true_relevant=true_relevant)
+                                    random_state=seed, true_relevant=true_relevant,
+                                    progress_cb=_sub)
                 rows.append({
                     "dataset": real_name, "method": m, "seed": seed,
                     "accuracy": r.accuracy, "stability": r.stability,
@@ -678,9 +689,11 @@ with st.sidebar:
     base_seed = st.number_input("Base seed", 0, 9999, 0, 1,
                                 help="First seed; repetitions use base_seed, +1, +2, …")
     strict_causal = st.checkbox(
-        "Strict causal mode (improved)", value=True,
-        help="Markov-Blanket isolation + conditional relevance + relevance-based "
-             "prototype selection. Recovers true drivers; slower.")
+        "Strict causal mode", value=False,
+        help="Isolates the discovered Markov Blanket (+ conditional relevance). Best "
+             "for data with a KNOWN causal structure — it maximises causal plausibility "
+             "but can REDUCE stability on general real datasets. Off = soft mode "
+             "(all features → clustering → full consensus), which is more stable here.")
     accuracy_refine = st.checkbox(
         "Accuracy refinement (wrapper)", value=False,
         help="Runs a light forward-swap over the KNN score after selection. "

@@ -109,6 +109,7 @@ def evaluate_method(
     n_bootstrap: int = 15,
     random_state: int = 42,
     true_relevant=None,
+    progress_cb=None,
 ) -> MethodResult:
     """Fit a method, then compute accuracy, stability, trustworthiness, runtime.
 
@@ -123,12 +124,21 @@ def evaluate_method(
     y = np.asarray(y)
     n = X.shape[0]
 
+    def _tick(frac):
+        if progress_cb is not None:
+            try:
+                progress_cb(min(1.0, max(0.0, frac)))
+            except Exception:
+                pass
+
     # --- fit on full data + timing ---
+    _tick(0.02)
     t0 = time.perf_counter()
     model = build_fn(random_state)
     model.fit(X, y)
     rep = model.transform(X)
     runtime = time.perf_counter() - t0
+    _tick(0.30)                       # full-data fit is the bulk of one method
 
     # --- accuracy ---
     acc = knn_accuracy(rep, y, random_state=random_state)
@@ -136,6 +146,7 @@ def evaluate_method(
     # --- trustworthiness (vs. full standardised space) ---
     Xstd = Preprocessor().fit_transform(X)
     trust = trustworthiness_score(Xstd, np.asarray(rep, dtype=float))
+    _tick(0.38)
 
     # --- stability across bootstraps ---
     # Each resample gets its own seed so that data-agnostic selectors (e.g.
@@ -147,7 +158,9 @@ def evaluate_method(
         m = build_fn(random_state + i + 1)
         m.fit(X[idx], y[idx])
         selections.append(list(getattr(m, "selected_features_", [])))
+        _tick(0.38 + 0.60 * (i + 1) / max(1, n_bootstrap))
     stab = stability_index(selections)
+    _tick(1.0)
 
     # --- causal plausibility (needs a known ground-truth Markov Blanket) ---
     sel = list(getattr(model, "selected_features_", []))
