@@ -34,6 +34,7 @@ from causal_hfs.evaluation import (
     evaluate_method,
     friedman_test,
     knn_accuracy,
+    suggest_k,
     wilcoxon_vs_baselines,
 )
 from causal_hfs.datasets import (
@@ -567,7 +568,7 @@ def sim_figure(step, sim):
 # Experiment runner
 # --------------------------------------------------------------------------- #
 def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_causal=False,
-                    n_seeds=1, base_seed=0, accuracy_refine=False):
+                    n_seeds=1, base_seed=0, accuracy_refine=False, auto_k=False):
     """Run each method on each dataset across ``n_seeds`` repetitions.
 
     Returns a *long* DataFrame with one row per (dataset, method, seed) so that
@@ -600,7 +601,14 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                 progress.progress(min(1.0, done / total))
             continue
         loaded.append(disp)
-        kk = min(k, X.shape[1])
+        if auto_k:
+            if progress:
+                progress.progress(min(1.0, done / total),
+                                  text=f"{real_name} — choosing best k…")
+            kk, _ = suggest_k(X, y, k_min=2, k_max=min(k, X.shape[1]),
+                              random_state=base_seed)
+        else:
+            kk = min(k, X.shape[1])
 
         def prop_build_factory(seed):
             if strict_causal:
@@ -647,7 +655,7 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                                     random_state=seed, true_relevant=true_relevant,
                                     progress_cb=_sub)
                 rows.append({
-                    "dataset": real_name, "method": m, "seed": seed,
+                    "dataset": real_name, "method": m, "seed": seed, "k": kk,
                     "accuracy": r.accuracy, "stability": r.stability,
                     "trustworthiness": r.trustworthiness, "runtime_s": r.runtime,
                     "causal_plausibility": r.causal_plausibility,
@@ -701,6 +709,12 @@ with st.sidebar:
                   help="How many features every method keeps (or components for "
                        "PCA/VAE). All methods use the same k for a fair comparison. "
                        "Lower k = more compression; higher k = more information kept.")
+    auto_k = st.checkbox(
+        "🔎 Auto-suggest k (accuracy elbow)", value=False,
+        help="Let the algorithm choose k per dataset: it ranks features by the "
+             "greedy relevance/redundancy order, then picks the smallest k whose "
+             "5-fold accuracy is within 0.5% of the best. The slider above becomes "
+             "the maximum k to consider.")
     n_bootstrap = st.slider("Bootstrap resamples (stability)", 3, 30, 8, 1,
                             help="Number of random row-resamples used to measure "
                                  "selection stability (Jaccard overlap of the chosen "
@@ -752,7 +766,8 @@ with tab_exp:
             t0 = time.perf_counter()
             df, loaded, skipped = run_experiments(
                 selected, k, n_bootstrap, methods, bar, strict_causal=strict_causal,
-                n_seeds=n_seeds, base_seed=base_seed, accuracy_refine=accuracy_refine)
+                n_seeds=n_seeds, base_seed=base_seed, accuracy_refine=accuracy_refine,
+                auto_k=auto_k)
             bar.empty()
             if df.empty:
                 st.error("No datasets could be loaded. UCI sets need internet access.")
@@ -761,7 +776,7 @@ with tab_exp:
                 st.session_state["exp_meta"] = dict(
                     loaded=loaded, skipped=skipped, k=k, nb=n_bootstrap,
                     n_seeds=n_seeds, base_seed=base_seed, strict_causal=strict_causal,
-                    secs=time.perf_counter() - t0, methods=methods)
+                    auto_k=auto_k, secs=time.perf_counter() - t0, methods=methods)
 
     df = st.session_state.get("exp_df")
     meta = st.session_state.get("exp_meta")
@@ -775,6 +790,13 @@ with tab_exp:
         st.success(
             f"Ran **{n_ds} dataset(s) × {len(methods_used)} methods × {nseeds} seed(s)** "
             f"in {meta['secs']:.1f}s  ·  datasets: **{', '.join(ds_names)}**.")
+        if "k" in df.columns:
+            k_by_ds = df.groupby("dataset")["k"].first()
+            if k_by_ds.nunique() > 1 or meta.get("auto_k"):
+                st.caption("🔎 Auto-selected **k** per dataset: " +
+                           " · ".join(f"{d} = {int(kk)}" for d, kk in k_by_ds.items()))
+            else:
+                st.caption(f"k = {int(k_by_ds.iloc[0])} features for every method.")
         for disp, err in meta["skipped"]:
             st.warning(f"Skipped **{disp}** — {err}")
 

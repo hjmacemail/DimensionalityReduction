@@ -31,6 +31,43 @@ from .consensus import stability_index
 from .preprocessing import Preprocessor
 
 
+def suggest_k(X, y, k_min=2, k_max=20, discrete_target=True, random_state=0,
+              tol=0.005, beta=1.0):
+    """Suggest the number of features ``k`` at the downstream-accuracy elbow.
+
+    Ranks features once with the proposed greedy max-relevance/min-redundancy
+    order (Random-Forest importance vs. correlation redundancy), then scores every
+    prefix length by 5-fold KNN accuracy. Returns the *smallest* ``k`` whose
+    accuracy is within ``tol`` of the best (a parsimony / elbow rule that favours a
+    compact, interpretable subset), along with the per-k accuracy curve.
+    """
+    from .graph import correlation_matrix
+    from .clustering import greedy_select
+    Xp = Preprocessor().fit_transform(X)
+    y = np.asarray(y)
+    p = Xp.shape[1]
+    k_max = int(min(k_max, p))
+    k_min = int(max(2, min(k_min, k_max)))
+    if discrete_target:
+        from sklearn.ensemble import RandomForestClassifier
+        est = RandomForestClassifier(n_estimators=100, random_state=random_state)
+    else:
+        from sklearn.ensemble import RandomForestRegressor
+        est = RandomForestRegressor(n_estimators=100, random_state=random_state)
+    rel = np.asarray(est.fit(Xp, y).feature_importances_, dtype=float)
+    rel = rel / (rel.max() or 1.0)
+    corr = correlation_matrix(Xp)
+    order = greedy_select(rel, corr, k_max, beta=beta, return_order=True)
+
+    curve = {}
+    for kk in range(k_min, k_max + 1):
+        feats = sorted(order[:kk])
+        curve[kk] = knn_accuracy(Xp[:, feats], y, random_state=random_state)
+    best_acc = max(curve.values())
+    best_k = min(kk for kk in curve if curve[kk] >= best_acc - tol)
+    return int(best_k), curve
+
+
 def knn_accuracy(rep: np.ndarray, y: np.ndarray, n_splits: int = 5,
                  n_neighbors: int = 5, random_state: int = 42) -> float:
     """5-fold stratified KNN accuracy on a representation ``rep``."""

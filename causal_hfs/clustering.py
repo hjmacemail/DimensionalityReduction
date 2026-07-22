@@ -114,7 +114,7 @@ def select_representatives(
 
 
 def greedy_select(relevance: np.ndarray, corr: np.ndarray, k: int,
-                  beta: float = 1.0) -> List[int]:
+                  beta: float = 1.0, return_order: bool = False) -> List[int]:
     """Greedy max-relevance / min-redundancy selection (mRMR-style).
 
     Instead of cutting the dendrogram into ``k`` groups and keeping one prototype
@@ -140,4 +140,4 @@ def greedy_select(relevance: np.ndarray, corr: np.ndarray, k: int,
                 best, best_j = sc, j
         selected.append(int(best_j))
         remaining.discard(best_j)
-    return sorted(selected)
+    return selected if return_order else sorted(selected)
