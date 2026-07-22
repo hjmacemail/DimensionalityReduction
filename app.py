@@ -697,8 +697,15 @@ with st.sidebar:
         st.dataframe(_ref, hide_index=True, use_container_width=True, height=280)
 
     st.header("② Protocol")
-    k = st.slider("k — features / components", 2, 40, 10, 1)
-    n_bootstrap = st.slider("Bootstrap resamples (stability)", 3, 30, 8, 1)
+    k = st.slider("k — features / components", 2, 40, 10, 1,
+                  help="How many features every method keeps (or components for "
+                       "PCA/VAE). All methods use the same k for a fair comparison. "
+                       "Lower k = more compression; higher k = more information kept.")
+    n_bootstrap = st.slider("Bootstrap resamples (stability)", 3, 30, 8, 1,
+                            help="Number of random row-resamples used to measure "
+                                 "selection stability (Jaccard overlap of the chosen "
+                                 "features across resamples) and to run the consensus "
+                                 "vote. More = smoother stability estimate but slower.")
     n_seeds = st.slider("Repetitions (random seeds)", 1, 10, 1, 1,
                         help="Repeat every run with a different seed to report "
                              "mean ± std and error bars. More seeds = more robust "
@@ -717,12 +724,18 @@ with st.sidebar:
              "Raises accuracy ~2-3% but can lower selection stability. Slower.")
 
     st.header("③ Methods & metrics")
-    methods = st.multiselect("Methods", METHOD_ORDER, default=METHOD_ORDER)
+    methods = st.multiselect("Methods", METHOD_ORDER, default=METHOD_ORDER,
+                             help="Which selectors to compare. 'Proposed' is always "
+                                  "included. PCA/VAE are projections (not "
+                                  "interpretable); the rest keep original features.")
     if "Proposed" not in methods:
         methods = ["Proposed"] + methods
     metric_choice = st.multiselect(
         "Metrics to display", [METRIC_LABELS[m] for m in CORE_METRICS],
-        default=[METRIC_LABELS[m] for m in CORE_METRICS])
+        default=[METRIC_LABELS[m] for m in CORE_METRICS],
+        help="Accuracy = 5-fold KNN accuracy · Stability = Jaccard overlap of "
+             "selected features across resamples · Trustworthiness = neighbourhood "
+             "preservation vs. the full data · Runtime = fit+transform seconds.")
     selected_metrics = [m for m in CORE_METRICS if METRIC_LABELS[m] in metric_choice] or CORE_METRICS
 
     run = st.button("▶ Run experiment", type="primary", use_container_width=True)
