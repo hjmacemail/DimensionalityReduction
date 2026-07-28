@@ -610,6 +610,9 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
         else:
             kk = min(k, X.shape[1])
 
+        # Prefilter must leave room for the requested k on very wide data.
+        pf_top = max(150, kk + 30)
+
         def prop_build_factory(seed):
             if strict_causal:
                 # Improved causal mode: Markov-Blanket isolation + conditional/direct
@@ -620,7 +623,7 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                     n_representatives=kk, n_bootstrap=max(6, n_bootstrap),
                     random_state=seed, restrict_to_mb=True, mb_max_cond_set=5,
                     conditional_relevance=True, prototype_by="relevance",
-                    wrapper_refine=accuracy_refine, prefilter_top=150,
+                    wrapper_refine=accuracy_refine, prefilter_top=pf_top,
                     lam=0.7, alpha=0.4))
             # Soft mode (default for real data): all features → clustering →
             # consensus, using the FULL bootstrap budget for a stable selection and
@@ -629,7 +632,7 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
                 n_representatives=kk, n_bootstrap=max(8, n_bootstrap),
                 random_state=seed, mb_max_cond_set=3, rf_relevance=True,
                 prototype_by="greedy", wrapper_refine=accuracy_refine,
-                prefilter_top=150))
+                prefilter_top=pf_top))
 
         wide = "  ·  high-dim, please wait" if X.shape[1] > 200 else ""
         for si in range(n_seeds):
@@ -705,16 +708,20 @@ with st.sidebar:
         st.dataframe(_ref, hide_index=True, use_container_width=True, height=280)
 
     st.header("② Protocol")
-    k = st.slider("k — features / components", 2, 40, 10, 1,
-                  help="How many features every method keeps (or components for "
-                       "PCA/VAE). All methods use the same k for a fair comparison. "
-                       "Lower k = more compression; higher k = more information kept.")
     auto_k = st.checkbox(
         "🔎 Auto-suggest k (accuracy elbow)", value=False,
         help="Let the algorithm choose k per dataset: it ranks features by the "
              "greedy relevance/redundancy order, then picks the smallest k whose "
-             "5-fold accuracy is within 0.5% of the best. The slider above becomes "
-             "the maximum k to consider.")
+             "5-fold accuracy is within 0.5% of the best. When on, the slider below "
+             "just sets the maximum k to search and manual selection is disabled.")
+    k = int(st.number_input(
+        "k — max to search" if auto_k else "k — features / components",
+        min_value=2, max_value=1200, value=10, step=1, disabled=auto_k,
+        help="How many features every method keeps (or components for PCA/VAE). "
+             "Ranges up to 1200 for the widest datasets and is automatically capped "
+             "to each dataset's dimensionality. All methods use the same k for a fair "
+             "comparison. Disabled while auto-suggest is on (it then sets the search "
+             "upper bound)."))
     n_bootstrap = st.slider("Bootstrap resamples (stability)", 3, 30, 8, 1,
                             help="Number of random row-resamples used to measure "
                                  "selection stability (Jaccard overlap of the chosen "

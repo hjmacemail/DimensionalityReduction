@@ -57,10 +57,21 @@ def suggest_k(X, y, k_min=2, k_max=20, discrete_target=True, random_state=0,
     rel = np.asarray(est.fit(Xp, y).feature_importances_, dtype=float)
     rel = rel / (rel.max() or 1.0)
     corr = correlation_matrix(Xp)
-    order = greedy_select(rel, corr, k_max, beta=beta, return_order=True)
+
+    # Bound the elbow search for speed on wide data (the accuracy elbow for an
+    # interpretable subset is virtually always small) and sweep a <=40-point grid.
+    search_max = int(min(k_max, 100))
+    order = greedy_select(rel, corr, search_max, beta=beta, return_order=True)
+    if search_max - k_min > 40:
+        step = max(1, (search_max - k_min) // 40)
+        ks = list(range(k_min, search_max + 1, step))
+        if ks[-1] != search_max:
+            ks.append(search_max)
+    else:
+        ks = list(range(k_min, search_max + 1))
 
     curve = {}
-    for kk in range(k_min, k_max + 1):
+    for kk in ks:
         feats = sorted(order[:kk])
         curve[kk] = knn_accuracy(Xp[:, feats], y, random_state=random_state)
     best_acc = max(curve.values())
