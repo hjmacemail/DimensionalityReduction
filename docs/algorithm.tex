@@ -1,0 +1,52 @@
+% Causality-Aware Stable Hierarchical Feature Selection — algorithm block.
+% Requires:  \usepackage{algorithm}  \usepackage{algpseudocode}  \usepackage{amsmath}
+\begin{algorithm}[t]
+\caption{Causality-Aware Stable Hierarchical Feature Selection}
+\label{alg:cahfs}
+\begin{algorithmic}[1]
+\Require $X\in\mathbb{R}^{n\times p}$, target $y$, budget $k$;
+         hyper-parameters $\alpha,\lambda,\beta,\tau$, bootstraps $B$
+\Ensure  feature subset $S\subseteq\{1,\dots,p\}$, $|S|=k$
+\Statex \textbf{--- optional: choose $k$ ---}
+\If{$\mathrm{auto\_k}$}
+  \State rank features once via \Call{SelectCore}{$X,y,k_{\max}$}
+  \State $\forall k'$ in grid: $\mathrm{acc}[k']\gets$ 5-fold KNN accuracy of top-$k'$ features
+  \State $k\gets \min\{k' : \mathrm{acc}[k']\ge \max_i\mathrm{acc}[i]-\epsilon\}$ \Comment{parsimony elbow}
+\EndIf
+\Statex \textbf{--- consensus over bootstrap resamples ---}
+\For{$b=0$ \textbf{to} $B$} \Comment{$b{=}0$: full data; $b{>}0$: row resample}
+  \State $(X_b,y_b)\gets (X,y)$ if $b{=}0$ else $\textsc{Resample}(X,y)$
+  \State $\mathcal{S}_b\gets \Call{SelectCore}{X_b,y_b,k}$
+\EndFor
+\State $S\gets$ the $k$ features with highest selection frequency
+       $\mathrm{freq}_i=\tfrac1B\sum_b \mathbf{1}[i\in\mathcal{S}_b]$ (those with $\mathrm{freq}\ge\tau$ first)
+\If{$\mathrm{wrapper\_refine}$}
+  \State greedily swap members of $S$ to maximise 5-fold KNN accuracy
+\EndIf
+\State \Return $S$
+\Statex
+\Function{SelectCore}{$X,y,k$}
+  \State $Z\gets$ median-impute then $z$-score columns of $X$ \Comment{$z=(x-\mu)/\sigma$}
+  \If{$p>\text{prefilter\_top}$}
+    \State keep top-$(\text{prefilter\_top})$ columns of $Z$ by ANOVA $F$-score;
+           $\mathrm{pf}\gets$ index map
+  \EndIf
+  \State $MB\gets \textsc{IAMB}(Z,y)$;\quad $C_i\gets\mathbf{1}[i\in MB]$ \Comment{Markov Blanket}
+  \State $\mathrm{rel}_i\gets$ RF importance $\mid$ $|\mathrm{pcorr}(f_i,y\mid\text{others})|$ $\mid$ $\mathrm{MI}(f_i,y)$
+  \State $R_i\gets \lambda C_i+(1-\lambda)\,\mathrm{rel}_i$
+  \State $\mathrm{cand}\gets MB$ \textbf{if} restrict\_to\_mb \textbf{else} all features
+  \State $W_{ij}\gets|\mathrm{corr}(f_i,f_j)|$; drop edges $<$ sparsify threshold
+  \State $D_{ij}\gets \alpha(1-|\mathrm{corr}(f_i,f_j)|)+(1-\alpha)\,\widehat{|R_i-R_j|}$
+  \If{strategy $=$ \textsc{greedy}} \Comment{default: max-relevance / min-redundancy}
+    \State $S'\gets\{\arg\max_i \mathrm{rel}_i\}$
+    \While{$|S'|<k$}
+      \State $j^\star\gets\arg\max_{j\notin S'}\big(\mathrm{rel}_j-\beta\max_{s\in S'}|\mathrm{corr}(f_j,f_s)|\big)$;\quad $S'\gets S'\cup\{j^\star\}$
+    \EndWhile
+  \Else \Comment{cluster then keep one prototype per group}
+    \State $\mathcal{C}\gets$ average-linkage clustering on $D$, cut into $k$ groups
+    \State $S'\gets\{\arg\max_{i\in c}\,\mathrm{score}_i : c\in\mathcal{C}\}$
+  \EndIf
+  \State \Return $\{\mathrm{pf}[i] : i\in S'\}$ \Comment{map back to original indices}
+\EndFunction
+\end{algorithmic}
+\end{algorithm}

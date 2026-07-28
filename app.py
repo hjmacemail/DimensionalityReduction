@@ -1018,6 +1018,48 @@ with tab_algo:
     st.caption("This is the **enhanced** version of the framework: the 7 base stages below, "
                "plus the improvements summarised here.")
 
+    with st.expander("📜 Pseudocode"):
+        st.code(
+r'''ALGORITHM  Causality-Aware Stable Hierarchical Feature Selection
+INPUT   X (n×p), target y, budget k;  hyperparams α, λ, β, τ, bootstraps B
+OUTPUT  S ⊆ {1..p}, |S| = k    (selected original features)
+
+# optional: let the algorithm choose k
+if auto_k:
+    rank features once by SELECT_CORE(X, y, k_max)
+    acc[k'] ← 5-fold KNN accuracy of the top-k' ranked features, for k' in grid
+    k ← smallest k' with acc[k'] ≥ max(acc) − tol         # parsimony elbow
+
+# full-data pass + B bootstrap resamples, then consensus
+for b in 0..B:                       # b=0 is full data; b>0 are row resamples
+    (Xb, yb) ← (X, y) if b==0 else resample_rows(X, y)
+    selections[b] ← SELECT_CORE(Xb, yb, k)
+S ← k features with highest selection frequency (freq ≥ τ first)
+if wrapper_refine:                   # optional accuracy pass
+    S ← greedy-swap members of S to maximise 5-fold KNN accuracy
+return sort(S)
+
+PROCEDURE SELECT_CORE(X, y, k):
+    Z ← median-impute then z-score columns of X            # z = (x−μ)/σ
+    if p > prefilter_top:                                  # high-dim speed guard
+        keep top-(prefilter_top) columns of Z by ANOVA F-score; pf ← index map
+    MB ← IAMB(Z, y);   C_i ← 1[i ∈ MB]                     # Markov Blanket
+    rel_i ← RF importance | |pcorr(f_i,y | others)| | MI(f_i,y)
+    R_i ← λ·C_i + (1−λ)·rel_i
+    cand ← MB if restrict_to_mb else all features
+    W_ij ← |corr(f_i,f_j)|; drop edges < sparsify_thresh   # redundancy graph
+    D_ij ← α·(1−|corr(f_i,f_j)|) + (1−α)·norm|R_i − R_j|   # hybrid distance
+    if strategy == "greedy":                               # DEFAULT
+        S' ← { argmax_i rel_i }
+        while |S'| < k:
+            j* ← argmax_{j∉S'} ( rel_j − β·max_{s∈S'} |corr(f_j,f_s)| )
+            S' ← S' ∪ {j*}                                 # max-relevance / min-redundancy
+    else:                                                  # cluster + prototype
+        clusters ← average-linkage on D, cut into k groups
+        S' ← { argmax_{i∈cluster} score_i  for each cluster }
+    return { pf[i] for i in S' }                           # map to original indices''',
+            language="text")
+
     with st.expander("✨ What's new in the current version (enhancements over the base paper)",
                      expanded=True):
         st.markdown(
