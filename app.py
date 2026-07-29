@@ -1070,8 +1070,9 @@ with tab_exp:
 # --------------------------------------------------------------------------- #
 with tab_algo:
     st.subheader("How the algorithm works")
-    st.caption("This is the **enhanced** version of the framework: the 7 base stages below, "
-               "plus the improvements summarised here.")
+    st.caption("This is the **current** version of the framework: the 7 base stages below, plus "
+               "the improvements summarised here. The default pipeline is *soft mode with the "
+               "causal-aware greedy selector* and *nested-CV, stability-aware k selection*.")
 
     with st.expander("📜 Pseudocode"):
         st.code(
@@ -1130,22 +1131,34 @@ PROCEDURE SELECT_CORE(X, y, k):
     with st.expander("✨ What's new in the current version (enhancements over the base paper)",
                      expanded=True):
         st.markdown(
-            "The default **Strict causal mode** applies enhancements ①–④; the wrapper (⑤) is opt-in.\n\n"
-            "**① Markov-Blanket isolation** — before clustering, the pipeline restricts to the "
-            "discovered Markov Blanket so only genuine causal candidates compete "
-            "(`restrict_to_mb`). *Effect:* recovers the true drivers — causal plausibility went "
-            "from ≈0 to **0.83** on a synthetic causal benchmark.\n\n"
-            "**② Conditional / direct relevance** — the relevance score `R` now uses the "
-            "*direct-effect* score `|partial-corr(f, y | strongest others)|` instead of marginal "
-            "mutual information, so a spurious aggregate collapses once its parent drivers are "
-            "conditioned on (`conditional_relevance`).\n\n"
-            "**③ Relevance-based prototype selection** — each cluster keeps its most "
-            "causally-relevant member (the driver of the group) rather than the high-degree / "
-            "high-MI hub (`prototype_by=\"relevance\"`; use `\"predictive\"` to favour accuracy).\n\n"
-            "**④ Full consensus budget** — the bootstrap consensus vote now uses the full budget. "
-            "*Effect:* a clean Pareto gain — accuracy **+0.3%**, stability **+6%**, trustworthiness "
-            "**+0.7%** vs. the previous default, nothing regresses.\n\n"
-            "**⑤ Wrapper refinement (optional)** — a light forward-swap over the downstream KNN "
+            "The **default** experiment pipeline is *soft mode with the causal-aware greedy "
+            "selector* (①–④). *Strict causal mode* (⑤) and the *wrapper* (⑥) are optional "
+            "toggles. Every headline number below was **measured** before being enabled.\n\n"
+            "**① Causal-aware greedy selection (the key change, DEFAULT).** The greedy "
+            "max-relevance / min-redundancy selector is now *seeded and scored* by the "
+            "causal-predictive score `R̃ = λ·rank(C) + (1−λ)·rank(rel)` — rank-normalised "
+            "Markov-Blanket membership `C` blended with Random-Forest relevance, at a modest "
+            "causal weight (`improved_lam≈0.15`). Previously the causal signal was computed but "
+            "**ignored** by the default selector. *Effect (measured):* beats the pure-relevance "
+            "greedy on **both** accuracy and stability — Wine 0.966→**0.978** / 0.748→**0.785**, "
+            "Breast Cancer 0.953→**0.961** / 0.527→**0.591** (`improved_greedy`).\n\n"
+            "**② Random-Forest relevance + rank normalisation.** The predictive term is a "
+            "supervised, non-linear RF importance, rank-normalised so it combines sensibly with "
+            "the MB-confidence term regardless of scale (`rf_relevance`, `rank_norm`).\n\n"
+            "**③ Full bootstrap-consensus budget.** The stability vote uses the full resample "
+            "budget. *Effect:* a clean Pareto gain — accuracy **+0.3%**, stability **+6%**, "
+            "trustworthiness **+0.7%** vs. the previous default, nothing regresses.\n\n"
+            "**④ Nested-CV, stability-aware k selection (auto-k).** When *Auto-suggest k* is on, "
+            "k is chosen by repeated nested CV with a leakage-safe ranked feature path refit "
+            "inside every fold: the **smallest k** within **one standard error** of the best "
+            "model-agnostic balanced accuracy whose **Kuncheva stability ≥ 0.60**, ties broken on "
+            "redundancy (`select_k_nested`). Picking k on predictive accuracy alone is avoided.\n\n"
+            "**⑤ Strict causal mode (optional).** Restricts clustering to the discovered Markov "
+            "Blanket (`restrict_to_mb`) and uses the *direct-effect* relevance "
+            "`|partial-corr(f, y | strongest others)|` (`conditional_relevance`). *Effect:* "
+            "maximises causal plausibility (≈0 → **0.83** on a synthetic causal benchmark) but "
+            "can reduce stability on general real data — best when the causal structure is known.\n\n"
+            "**⑥ Wrapper refinement (optional).** A light forward-swap over the downstream KNN "
             "score, run once after selection (`wrapper_refine`). *Effect:* **+2–3% accuracy** "
             "(can trade some stability); adds a trace stage 8. Toggle it in the demo on the right.")
 
@@ -1164,7 +1177,10 @@ PROCEDURE SELECT_CORE(X, y, k):
             "Dataset", [n for n in CATALOGUE if "(sklearn)" in n],
             key="algo_ds", format_func=_ds_label)
         a_k = st.number_input("k", 2, 40, 6, 1, key="algo_k")
-        a_strict = st.checkbox("Strict causal mode (improved)", value=True, key="algo_strict")
+        a_strict = st.checkbox("Strict causal mode (optional)", value=False, key="algo_strict",
+                               help="Off = the default soft mode with the causal-aware greedy "
+                                    "selector (what the Experiments tab runs). On = restrict to "
+                                    "the Markov Blanket + conditional relevance.")
         a_wrap = st.checkbox("Accuracy refinement (wrapper)", value=False, key="algo_wrap")
         if st.button("▶ Run with trace", key="algo_run", type="primary"):
             X, y, names, ncls, real_name, true_relevant = load_catalogue_dataset(a_dataset)
@@ -1175,8 +1191,11 @@ PROCEDURE SELECT_CORE(X, y, k):
                                       prototype_by="relevance", wrapper_refine=a_wrap,
                                       prefilter_top=150, lam=0.7, alpha=0.4)
             else:
-                cfg = FrameworkConfig(n_representatives=kk, n_bootstrap=8, mb_max_cond_set=2,
-                                      wrapper_refine=a_wrap, prefilter_top=150)
+                # Default pipeline: soft mode + causal-aware greedy (matches Experiments).
+                cfg = FrameworkConfig(n_representatives=kk, n_bootstrap=8, mb_max_cond_set=3,
+                                      rf_relevance=True, prototype_by="greedy",
+                                      improved_greedy=True, wrapper_refine=a_wrap,
+                                      prefilter_top=150)
             with st.status("Running the algorithm…", expanded=True) as status:
                 def _cb(entry):
                     st.markdown(f"**{entry['stage']}** — {entry['detail']}")

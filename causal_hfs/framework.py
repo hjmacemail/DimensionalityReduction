@@ -100,10 +100,12 @@ class CausalHFS:
              "detail": "Median-impute missing values, z-score standardise, and view "
                        "each feature as a point in sample space."},
             {"stage": "2. Causal discovery & relevance",
-             "latex": r"R_i = \lambda\, C_i + (1-\lambda)\,\mathrm{rel}_i",
+             "latex": r"\tilde R_i = \lambda\,\mathrm{rank}(C_i) + (1-\lambda)\,\mathrm{rank}(\mathrm{rel}_i)",
              "detail": "Discover the Markov Blanket MB(Y) (IAMB + partial-correlation "
-                       "CI tests) → binary priority C_i. Combine with a predictive "
-                       "score rel_i (marginal MI, or conditional/direct relevance)."},
+                       "CI tests) → causal priority C_i (membership, or bootstrap MB "
+                       "confidence). Blend with a predictive score rel_i (Random-Forest "
+                       "importance by default; or MI / conditional relevance), "
+                       "rank-normalised in the causal-aware default."},
             {"stage": "3. Structural mapping",
              "latex": r"w_{ij} = \lvert \mathrm{corr}(f_i, f_j) \rvert",
              "detail": "Build a sparsified weighted feature graph capturing "
@@ -115,10 +117,12 @@ class CausalHFS:
             {"stage": "5. Hierarchical agglomeration",
              "latex": r"\text{average linkage} \;\rightarrow\; k\ \text{clusters}",
              "detail": "Group redundant features while preserving their identity."},
-            {"stage": "6. Representative extraction",
-             "latex": r"\arg\max_{i}\; S_i \quad (\text{composite or relevance})",
-             "detail": "Pick one prototype per cluster — the causal driver of its "
-                       "redundancy group."},
+            {"stage": "6. Representative selection",
+             "latex": r"j^\ast = \arg\max_{j\notin S}\big(\tilde R_j - \beta\max_{s\in S}\lvert\mathrm{corr}(f_j,f_s)\rvert\big)",
+             "detail": "Default: causal-aware greedy — seed at argmax R̃, then add the "
+                       "feature maximising causal relevance minus redundancy (max-relevance / "
+                       "min-redundancy). Alternative: cut the dendrogram into k clusters and "
+                       "keep one prototype each."},
             {"stage": "7. Consensus stability",
              "latex": r"\text{keep } f \text{ if } \mathrm{freq} \ge \tau \;;\quad \text{Jaccard stability}",
              "detail": "Repeat over B bootstraps and keep features selected "
