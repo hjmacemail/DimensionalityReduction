@@ -179,26 +179,41 @@ class LASSOMethod(BaseMethod):
         return self
 
 
+def _greedy_mrmr(rel, C, k, red_weight=1.0):
+    """Vectorised mRMR greedy: maximise rel[j] - red_weight * mean|corr(j, selected)|.
+
+    Keeps a running redundancy sum so each step is O(p) rather than O(p·|selected|)
+    — essential for wide data. ``C`` is the absolute-correlation matrix.
+    """
+    p = len(rel)
+    k = int(min(k, p))
+    selected = [int(np.argmax(rel))]
+    red_sum = C[:, selected[0]].astype(float).copy()
+    remaining = np.ones(p, dtype=bool)
+    remaining[selected[0]] = False
+    while len(selected) < k and remaining.any():
+        score = rel - red_weight * (red_sum / len(selected))
+        score[~remaining] = -np.inf
+        j = int(np.argmax(score))
+        selected.append(j)
+        remaining[j] = False
+        red_sum += C[:, j]
+    return selected
+
+
 class MRMRMethod(BaseMethod):
     name = "mRMR"
 
     def fit(self, X, y):
         Xp = self._pre.fit_transform(X)
+        # Prefilter wide data before the O(p^2) correlation + MI (was the main
+        # reason high-dimensional runs like Olivetti 1200-d stalled).
+        Xp, pf = _causal_prefilter(Xp, y)
         k = min(self.k, Xp.shape[1])
         rel = mutual_information(Xp, y, self.discrete_target, self.random_state)
         C = correlation_matrix(Xp)
-        selected: List[int] = [int(np.argmax(rel))]
-        remaining = set(range(Xp.shape[1])) - set(selected)
-        while len(selected) < k and remaining:
-            best_j, best_score = None, -np.inf
-            for j in remaining:
-                redundancy = np.mean([C[j, s] for s in selected])
-                score = rel[j] - redundancy  # relevance minus redundancy
-                if score > best_score:
-                    best_score, best_j = score, j
-            selected.append(best_j)
-            remaining.discard(best_j)
-        self.selected_features_ = sorted(selected)
+        selected = _greedy_mrmr(rel, C, k, red_weight=1.0)
+        self.selected_features_ = sorted(int(pf[i]) for i in selected)
         return self
 
 
@@ -252,17 +267,7 @@ class CAFEMethod(BaseMethod):
         ).fit(Xp, y, lam=0.5)
         R = analyzer.relevance_
         C = correlation_matrix(Xp)
-        selected: List[int] = [int(np.argmax(R))]
-        remaining = set(range(Xp.shape[1])) - set(selected)
-        while len(selected) < k and remaining:
-            best_j, best_score = None, -np.inf
-            for j in remaining:
-                redundancy = np.mean([C[j, s] for s in selected])
-                score = R[j] - 0.5 * redundancy
-                if score > best_score:
-                    best_score, best_j = score, j
-            selected.append(best_j)
-            remaining.discard(best_j)
+        selected = _greedy_mrmr(R, C, k, red_weight=0.5)
         self.selected_features_ = sorted(int(pf[i]) for i in selected)
         return self
 
