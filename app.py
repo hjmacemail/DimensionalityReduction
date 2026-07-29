@@ -522,6 +522,111 @@ def build_pdf_report(mean_df, std_df, text_df, per_ds, ds_names, sel_labels,
     return buf.getvalue()
 
 
+def render_full_report(df, meta):
+    """Render the full-benchmark report (summary, tables, charts) + save buttons."""
+    methods_used = [m for m in METHOD_ORDER if m in df["method"].unique()]
+    ds_names = list(df["dataset"].unique())
+    n_ds = len(ds_names)
+    nseeds = df["seed"].nunique() if "seed" in df.columns else 1
+    st.success(f"Benchmarked **{n_ds} datasets × {len(methods_used)} methods × "
+               f"{nseeds} seed(s)** in {meta['secs']:.0f}s.")
+    for disp, err in meta.get("skipped", []):
+        st.warning(f"Skipped **{disp}** — {err} (online datasets need internet).")
+    if "k" in df.columns:
+        k_by_ds = df.groupby("dataset")["k"].first()
+        st.caption("🔎 Auto-selected **k** per dataset (nested-CV): " +
+                   " · ".join(f"{d} = {int(kk)}" for d, kk in k_by_ds.items()))
+
+    per_ds = (df.groupby(["dataset", "method"], as_index=False)
+              [CORE_METRICS + ["causal_plausibility", "causal_recall"]].mean())
+    mean_full, text_full = mean_std_tables(df, CORE_METRICS, methods_used)
+    std_full = df.groupby("method")[CORE_METRICS].std().reindex(methods_used).fillna(0.0)
+    std_full.columns = [METRIC_LABELS[c] for c in CORE_METRICS]
+    sel_labels = [METRIC_LABELS[m] for m in CORE_METRICS]
+    acc_col, stab_col = METRIC_LABELS["accuracy"], METRIC_LABELS["stability"]
+
+    bullets = []
+    for lbl in sel_labels:
+        lower = "runtime" in lbl.lower()
+        best_m = mean_full[lbl].idxmin() if lower else mean_full[lbl].idxmax()
+        bullets.append(f"**{lbl}**: {best_m} ({mean_full.loc[best_m, lbl]:.3f})")
+    pareto = []
+    for m in mean_full.index:
+        dominated = any(
+            (mean_full.loc[o, acc_col] >= mean_full.loc[m, acc_col]) and
+            (mean_full.loc[o, stab_col] >= mean_full.loc[m, stab_col]) and (o != m) and
+            (mean_full.loc[o, acc_col] > mean_full.loc[m, acc_col] or
+             mean_full.loc[o, stab_col] > mean_full.loc[m, stab_col])
+            for o in mean_full.index)
+        if not dominated:
+            pareto.append(m)
+    cfg_manifest = {
+        "datasets": meta.get("loaded", ds_names), "methods": methods_used,
+        "k": "auto (nested-CV)", "bootstrap_resamples": meta.get("nb"),
+        "seeds": list(range(nseeds)), "strict_causal_mode": False,
+    }
+
+    st.markdown("#### Summary")
+    st.markdown("**Best per metric** — " + "; ".join(bullets) + ".")
+    if "Proposed" in pareto:
+        st.success(f"**Proposed is Pareto-optimal** on accuracy vs. stability "
+                   f"(non-dominated: {', '.join(pareto)}).")
+    else:
+        st.info(f"Pareto-optimal (accuracy vs. stability): {', '.join(pareto)}.")
+
+    st.markdown(f"#### Aggregate metrics (mean ± std over {n_ds} datasets)")
+    st.markdown(render_table(mean_full[sel_labels], best_per_column_mask(mean_full[sel_labels]),
+                             proposed_row="Proposed", display=text_full[sel_labels]),
+                unsafe_allow_html=True)
+    st.caption("Green = best per metric · Proposed row tinted blue · runtime lower is better.")
+
+    if n_ds >= 2:
+        st.markdown("#### Average rank across datasets (1 = best)")
+        ranks = average_ranks(per_ds, CORE_METRICS).reindex(methods_used)
+        rmask = np.zeros(ranks.shape, dtype=bool)
+        for j in range(ranks.shape[1]):
+            rmask[:, j] = ranks.to_numpy()[:, j] == np.nanmin(ranks.to_numpy()[:, j])
+        st.markdown(render_table(ranks, rmask, proposed_row="Proposed"), unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Bars = mean · whiskers = std")
+        st_show(metric_bars(mean_full[sel_labels], std_full[sel_labels], sel_labels),
+                use_container_width=False)
+    with c2:
+        if len(methods_used) >= 2 and acc_col in mean_full.columns and stab_col in mean_full.columns:
+            st_show(pareto_scatter(mean_full, std_full, acc_col, stab_col),
+                    use_container_width=False)
+            st.caption("Green = Pareto-optimal · red = Proposed.")
+
+    st.markdown("#### Per-dataset results")
+    for d in ds_names:
+        sub = (per_ds[per_ds["dataset"] == d].set_index("method")
+               .reindex(methods_used)[CORE_METRICS])
+        sub.columns = [METRIC_LABELS[m] for m in CORE_METRICS]
+        sub.index.name = "method"
+        with st.expander(f"📄 {d}"):
+            st.markdown(render_table(sub, best_per_column_mask(sub), proposed_row="Proposed"),
+                        unsafe_allow_html=True)
+
+    st.markdown("#### 💾 Save the report")
+    d1, d2, d3 = st.columns(3)
+    d1.download_button("⬇ Results CSV", df.to_csv(index=False).encode(),
+                       "full_benchmark_results.csv", "text/csv", use_container_width=True)
+    try:
+        pdf_bytes = build_pdf_report(mean_full, std_full, text_full, per_ds, ds_names,
+                                     sel_labels, cfg_manifest, bullets, pareto,
+                                     methods_used, CORE_METRICS)
+        d2.download_button("⬇ PDF report", pdf_bytes, "full_benchmark_report.pdf",
+                           "application/pdf", use_container_width=True, type="primary")
+    except Exception as exc:
+        d2.warning(f"PDF failed: {exc}")
+    latex = to_latex_table(mean_full[sel_labels], std_full[sel_labels],
+                           caption="Full benchmark: mean $\\pm$ std across all datasets.")
+    d3.download_button("⬇ LaTeX (.tex)", latex.encode(), "full_benchmark.tex",
+                       "text/plain", use_container_width=True)
+
+
 # --------------------------------------------------------------------------- #
 # Step-by-step simulation (visual)
 # --------------------------------------------------------------------------- #
@@ -840,8 +945,9 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
 # =========================================================================== #
 st.title("Causality-Aware Stable Hierarchical Feature Selection")
 
-tab_exp, tab_algo, tab_sim, tab_hitl = st.tabs(
-    ["🔬 Experiments", "🧠 Algorithm", "🎬 Simulate", "🧑‍🔬 Human-in-the-Loop"])
+tab_exp, tab_report, tab_algo, tab_sim, tab_hitl = st.tabs(
+    ["🔬 Experiments", "📑 Full Report", "🧠 Algorithm", "🎬 Simulate",
+     "🧑‍🔬 Human-in-the-Loop"])
 
 # --------------------------------------------------------------------------- #
 # TAB 1 — Experiments
@@ -1227,6 +1333,54 @@ with tab_exp:
                                "causal_hfs_config.json", "application/json", use_container_width=True)
             with st.expander("Preview LaTeX table"):
                 st.code(latex, language="latex")
+
+
+# --------------------------------------------------------------------------- #
+# TAB — Full Report (one-click benchmark over every dataset)
+# --------------------------------------------------------------------------- #
+with tab_report:
+    st.subheader("Full benchmark report")
+    st.markdown(
+        "Run **every dataset** in the catalogue with **auto-suggested k** (nested-CV), "
+        "**all methods**, and **all metrics** — then view the report below and save it as "
+        "CSV or PDF.")
+    st.caption("Online (UCI) and high-dimensional datasets need internet; any that can't "
+               "load are skipped and listed. This is a heavy run — expect a few minutes.")
+
+    fc1, fc2 = st.columns(2)
+    fb_nb = fc1.slider("Bootstrap resamples (stability)", 3, 20, 8, 1, key="fb_nb",
+                       help="More resamples = smoother stability estimate but slower.")
+    fb_seeds = fc2.slider("Repetitions (random seeds)", 1, 5, 1, 1, key="fb_seeds",
+                          help="Repeat every run with a different seed for mean ± std. "
+                               "Keep at 1 for the fastest full sweep.")
+    run_full = st.button("▶ Run full benchmark (all datasets)", type="primary",
+                         key="fb_run", use_container_width=True)
+
+    if run_full:
+        allsel = list(CATALOGUE)
+        bar = st.progress(0.0, text="Running full benchmark over every dataset…")
+        t0 = time.perf_counter()
+        fdf, floaded, fskipped = run_experiments(
+            allsel, k=40, n_bootstrap=fb_nb, methods=METHOD_ORDER, progress=bar,
+            strict_causal=False, n_seeds=fb_seeds, base_seed=0,
+            accuracy_refine=False, auto_k=True)
+        bar.empty()
+        if fdf.empty:
+            st.error("No datasets could be loaded (offline sets should still work — "
+                     "check the app has internet access).")
+        else:
+            st.session_state["full_df"] = fdf
+            st.session_state["full_meta"] = dict(
+                loaded=floaded, skipped=fskipped, secs=time.perf_counter() - t0,
+                nb=fb_nb, seeds=fb_seeds)
+
+    fdf = st.session_state.get("full_df")
+    fmeta = st.session_state.get("full_meta")
+    if fdf is None:
+        st.info("Click **Run full benchmark** to generate the report. Your last report "
+                "stays here until you run it again.")
+    else:
+        render_full_report(fdf, fmeta)
 
 
 # --------------------------------------------------------------------------- #
