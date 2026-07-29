@@ -35,6 +35,7 @@ from causal_hfs.evaluation import (
     friedman_test,
     knn_accuracy,
     suggest_k,
+    select_k_nested,
     wilcoxon_vs_baselines,
 )
 from causal_hfs.datasets import (
@@ -604,9 +605,18 @@ def run_experiments(selected, k, n_bootstrap, methods, progress=None, strict_cau
         if auto_k:
             if progress:
                 progress.progress(min(1.0, done / total),
-                                  text=f"{real_name} — choosing best k…")
-            kk, _ = suggest_k(X, y, k_min=2, k_max=min(k, X.shape[1]),
-                              random_state=base_seed)
+                                  text=f"{real_name} — choosing best k (nested CV)…")
+            # Nested-CV, stability-aware k selection: smallest k whose performance is
+            # within one SE of the best AND meets the Kuncheva-stability floor, with a
+            # redundancy tie-break. Fewer repeats on wide data to stay responsive.
+            reps = 2 if X.shape[1] > 200 else 3
+            kk, kdiag = select_k_nested(
+                X, y, k_max=min(k, X.shape[1]), random_state=base_seed,
+                n_repeats=reps, tau_stability=0.6)
+            try:
+                st.session_state.setdefault("k_selection", {})[real_name] = kdiag
+            except Exception:
+                pass
         else:
             kk = min(k, X.shape[1])
 
@@ -714,11 +724,13 @@ with st.sidebar:
 
     st.header("② Protocol")
     auto_k = st.checkbox(
-        "🔎 Auto-suggest k (accuracy elbow)", value=False,
-        help="Let the algorithm choose k per dataset: it ranks features by the "
-             "greedy relevance/redundancy order, then picks the smallest k whose "
-             "5-fold accuracy is within 0.5% of the best. When on, the slider below "
-             "just sets the maximum k to search and manual selection is disabled.")
+        "🔎 Auto-suggest k (nested CV, stability-aware)", value=False,
+        help="Let the algorithm choose k per dataset via repeated nested CV: it builds "
+             "a leakage-safe ranked feature path inside every training fold, then picks "
+             "the SMALLEST k whose balanced accuracy is within one standard error of the "
+             "best AND whose Kuncheva stability ≥ 0.60 (redundancy breaks ties). When on, "
+             "the slider below just sets the maximum k to search and manual selection is "
+             "disabled. See 'How k was chosen' after running.")
     k = int(st.number_input(
         "k — max to search" if auto_k else "k — features / components",
         min_value=2, max_value=1200, value=10, step=1, disabled=auto_k,
@@ -811,6 +823,44 @@ with tab_exp:
                 st.caption(f"k = {int(k_by_ds.iloc[0])} features for every method.")
         for disp, err in meta["skipped"]:
             st.warning(f"Skipped **{disp}** — {err}")
+
+        ksel = st.session_state.get("k_selection", {})
+        if meta.get("auto_k") and ksel:
+            with st.expander("🔎 How **k** was chosen (nested-CV, stability-aware)"):
+                st.caption(
+                    "For each dataset, a leakage-safe ranked feature path is built "
+                    "*inside every training fold* (repeated stratified CV). We then take "
+                    "the **smallest k** whose mean performance is within **one standard "
+                    "error** of the best, that also clears the **Kuncheva stability floor "
+                    "(≥0.60)**; ties break on lower redundancy. Performance is the best of "
+                    "logistic-regression / KNN balanced accuracy (model-agnostic).")
+                for dname, d in ksel.items():
+                    kb = d["k_best"]
+                    rows = []
+                    for kx in d["k_grid"]:
+                        rows.append({
+                            "k": kx,
+                            "perf": round(d["mean_perf"][kx], 3),
+                            "±SE": round(d["se_perf"][kx], 3),
+                            "stability": round(d["stability"][kx], 3),
+                            "redundancy": round(d["redundancy"][kx], 3),
+                            "≥1-SE": "✓" if kx in d["eligible"] else "",
+                            "stable": "✓" if kx in d["stable"] else "",
+                        })
+                    st.markdown(
+                        f"**{dname}** — chosen **k\\*** by rule *{d['rule']}*; "
+                        f"peak at k={kb} (perf {d['mean_perf'][kb]:.3f}, "
+                        f"one-SE threshold {d['one_se_threshold']:.3f}).")
+                    st.dataframe(rows, hide_index=True, use_container_width=True)
+                    try:
+                        import pandas as _pd
+                        chart = _pd.DataFrame({
+                            "performance": d["mean_perf"],
+                            "stability": d["stability"],
+                        })
+                        st.line_chart(chart, height=180)
+                    except Exception:
+                        pass
 
         # ---- Aggregates (shared across sub-tabs) ----
         per_ds = (df.groupby(["dataset", "method"], as_index=False)
@@ -1029,11 +1079,20 @@ r'''ALGORITHM  Causality-Aware Stable Hierarchical Feature Selection
 INPUT   X (n×p), target y, budget k;  hyperparams α, λ, β, τ, bootstraps B
 OUTPUT  S ⊆ {1..p}, |S| = k    (selected original features)
 
-# optional: let the algorithm choose k
+# optional: let the algorithm choose k — nested CV, stability-aware (no leakage)
 if auto_k:
-    rank features once by SELECT_CORE(X, y, k_max)
-    acc[k'] ← 5-fold KNN accuracy of the top-k' ranked features, for k' in grid
-    k ← smallest k' with acc[k'] ≥ max(acc) − tol         # parsimony elbow
+    for each repeated stratified inner split (train/valid):
+        rank ← SELECT_CORE_RANKING(train)         # ranking REFIT inside the fold
+        for k' in grid:                           # nested sets S_k' = rank[:k']
+            perf[·,k'] ← balanced-acc of {logreg,knn} on valid using S_k'
+            redund[·,k'] ← mean pairwise |corr| within S_k'
+            sets[·,k'] ← S_k'
+    mean,SE ← per-k mean and standard error of perf
+    stability[k'] ← mean pairwise Kuncheva index of sets[·,k']   # chance-adjusted
+    eligible ← { k' : mean[k'] ≥ max(mean) − SE(argmax mean) }   # one-SE rule
+    stable   ← { k' ∈ eligible : stability[k'] ≥ τ_s (=0.60) }
+    k ← argmin_{k'∈stable} ( redundancy[k'] + c·k'/k_max )       # tie: smaller k
+        else fall back to composite score (perf + ωs·stab − ωr·redund − ωc·k)
 
 # full-data pass + B bootstrap resamples, then consensus
 for b in 0..B:                       # b=0 is full data; b>0 are row resamples

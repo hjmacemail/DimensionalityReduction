@@ -79,6 +79,174 @@ def suggest_k(X, y, k_min=2, k_max=20, discrete_target=True, random_state=0,
     return int(best_k), curve
 
 
+def kuncheva_index(a: Sequence[int], b: Sequence[int], p: int) -> float:
+    """Kuncheva consistency index for two size-k subsets of ``p`` features.
+
+    K = (r - k^2/p) / (k - k^2/p), where r = |a ∩ b|. Unlike Jaccard it corrects
+    for the overlap expected by chance, so it is the right stability measure for
+    *fixed-size* feature sets (a size-k Jaccard is inflated for large k/p).
+    """
+    a, b = set(a), set(b)
+    k = len(a)
+    if k == 0 or k >= p:
+        return 1.0
+    r = len(a & b)
+    exp = k * k / p
+    denom = k - exp
+    if abs(denom) < 1e-12:
+        return 1.0
+    return float((r - exp) / denom)
+
+
+def _core_ranking(X_train, y_train, k_max, random_state=0, beta=1.0,
+                  improved_lam=0.15, discrete_target=True, prefilter_top=150):
+    """Leakage-safe ranked feature path for the *proposed* method on a train fold.
+
+    Fits preprocessing on the training partition ONLY, computes the causal-aware
+    relevance R = λ·rank(MB) + (1-λ)·rank(RF-importance), then returns the greedy
+    max-relevance / min-redundancy ORDER (so prefixes give nested sets S_k). Returns
+    indices into the original columns of ``X_train``.
+    """
+    from .graph import correlation_matrix
+    from .clustering import greedy_select
+    from .causal import CausalAnalyzer
+    Xp = Preprocessor().fit_transform(X_train)
+    y = np.asarray(y_train)
+    p = Xp.shape[1]
+    # High-dim guard: ANOVA-F prefilter inside the fold (still leakage-safe).
+    pf = np.arange(p)
+    if prefilter_top and p > prefilter_top:
+        from sklearn.feature_selection import f_classif
+        F, _ = f_classif(Xp, y)
+        F = np.nan_to_num(F)
+        pf = np.argsort(F)[::-1][:prefilter_top]
+        Xp = Xp[:, pf]
+    analyzer = CausalAnalyzer(discrete_target=discrete_target,
+                              random_state=random_state, rf_relevance=True,
+                              rank_norm=True).fit(Xp, y, lam=improved_lam)
+    R = analyzer.relevance_
+    corr = correlation_matrix(Xp)
+    kk = int(min(k_max, Xp.shape[1]))
+    order_local = greedy_select(R, corr, kk, beta=beta, return_order=True)
+    return [int(pf[j]) for j in order_local]
+
+
+def select_k_nested(X, y, k_grid=None, k_max=None, n_splits=5, n_repeats=3,
+                    tau_stability=0.6, metric="balanced_accuracy",
+                    complexity_weight=0.02, discrete_target=True, random_state=0,
+                    models=("logreg", "knn")):
+    """Choose ``k`` by repeated nested CV with a composite, stability-aware rule.
+
+    Implements the recommended hierarchy:
+      1. Build a leakage-safe ranked feature path *inside every training fold*.
+      2. Score each prefix S_k with a model-agnostic downstream metric.
+      3. Keep k within one standard error of the best mean performance.
+      4. Drop k below the minimum Kuncheva-stability threshold.
+      5. Among survivors pick lowest redundancy + complexity, tie-break smaller k.
+      6. If none pass the stability floor, fall back to a normalised composite score.
+
+    Returns ``(k_star, diagnostics)`` where diagnostics carries per-k mean/SE
+    performance, Kuncheva stability, and redundancy for plotting.
+    """
+    from sklearn.model_selection import RepeatedStratifiedKFold
+    from sklearn.metrics import get_scorer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from .graph import correlation_matrix
+
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y)
+    n, p = X.shape
+    # Default k_max: min(p, 100, n/10) — guards small-n, large-p overfitting.
+    if k_max is None:
+        k_max = int(max(2, min(p, 100, n // 10)))
+    if k_grid is None:
+        base = list(range(1, min(20, k_max) + 1))
+        base += [k for k in (25, 30, 40, 50, 75, 100) if k <= k_max]
+        k_grid = sorted(set(k for k in base if 1 <= k <= k_max))
+    scorer = get_scorer(metric)
+
+    def _build_models():
+        ms = []
+        for m in models:
+            if m == "knn":
+                ms.append(KNeighborsClassifier(n_neighbors=min(5, max(1, n - 1))))
+            elif m == "logreg":
+                ms.append(LogisticRegression(max_iter=1000))
+        return ms or [KNeighborsClassifier(n_neighbors=5)]
+
+    minc = np.min(np.bincount(y)) if y.dtype.kind in "iu" else n
+    nsp = max(2, min(n_splits, int(minc)))
+    rskf = RepeatedStratifiedKFold(n_splits=nsp, n_repeats=n_repeats,
+                                   random_state=random_state)
+    perf = {k: [] for k in k_grid}
+    red = {k: [] for k in k_grid}
+    sets = {k: [] for k in k_grid}
+    for tr, va in rskf.split(X, y):
+        Xtr, ytr, Xva, yva = X[tr], y[tr], X[va], y[va]
+        order = _core_ranking(Xtr, ytr, max(k_grid), random_state=random_state,
+                              discrete_target=discrete_target)
+        # Preprocessing (z-score) fit on train only, applied to both partitions.
+        sc = StandardScaler().fit(Xtr)
+        Ztr, Zva = sc.transform(Xtr), sc.transform(Xva)
+        corr_tr = correlation_matrix(Ztr)
+        for k in k_grid:
+            S = order[:k]
+            sets[k].append(tuple(sorted(S)))
+            best = -np.inf
+            for mdl in _build_models():
+                try:
+                    mdl.fit(Ztr[:, S], ytr)
+                    sc_val = scorer(mdl, Zva[:, S], yva)
+                except Exception:
+                    sc_val = np.nan
+                if np.isfinite(sc_val):
+                    best = max(best, sc_val)
+            perf[k].append(best if np.isfinite(best) else np.nan)
+            if k >= 2:
+                sub = corr_tr[np.ix_(S, S)]
+                iu = np.triu_indices(k, 1)
+                red[k].append(float(np.nanmean(np.abs(sub[iu]))))
+            else:
+                red[k].append(0.0)
+
+    mean_perf, se_perf, stab, redun = {}, {}, {}, {}
+    for k in k_grid:
+        v = np.array([x for x in perf[k] if np.isfinite(x)])
+        mean_perf[k] = float(np.mean(v)) if v.size else float("nan")
+        se_perf[k] = float(np.std(v, ddof=1) / np.sqrt(v.size)) if v.size > 1 else 0.0
+        redun[k] = float(np.nanmean(red[k])) if red[k] else 0.0
+        ss = sets[k]
+        pair = [kuncheva_index(ss[i], ss[j], p)
+                for i in range(len(ss)) for j in range(i + 1, len(ss))]
+        stab[k] = float(np.mean(pair)) if pair else 1.0
+
+    k_best = max(mean_perf, key=lambda k: (mean_perf[k] if np.isfinite(mean_perf[k]) else -np.inf))
+    thr = mean_perf[k_best] - se_perf[k_best]
+    eligible = [k for k in k_grid if np.isfinite(mean_perf[k]) and mean_perf[k] >= thr]
+    stable = [k for k in eligible if stab[k] >= tau_stability]
+    if stable:
+        k_star = min(stable, key=lambda k: (redun[k] + complexity_weight * k / max(k_grid), k))
+        rule = "one-SE ∩ stability, min redundancy"
+    else:
+        # Fallback: normalised composite among all k (perf dominant).
+        def _nrm(d):
+            vals = np.array([d[k] for k in k_grid], float)
+            lo, hi = np.nanmin(vals), np.nanmax(vals)
+            return {k: (0.0 if hi - lo < 1e-12 else (d[k] - lo) / (hi - lo)) for k in k_grid}
+        nP, nS, nR = _nrm(mean_perf), _nrm(stab), _nrm(redun)
+        comp = {k: nP[k] + 0.20 * nS[k] - 0.10 * nR[k] - 0.05 * k / max(k_grid)
+                for k in k_grid}
+        k_star = max(comp, key=lambda k: comp[k])
+        rule = "composite score (no k met stability floor)"
+
+    diag = {"k_grid": k_grid, "mean_perf": mean_perf, "se_perf": se_perf,
+            "stability": stab, "redundancy": redun, "k_best": k_best,
+            "one_se_threshold": thr, "eligible": eligible, "stable": stable,
+            "metric": metric, "rule": rule}
+    return int(k_star), diag
+
+
 def knn_accuracy(rep: np.ndarray, y: np.ndarray, n_splits: int = 5,
                  n_neighbors: int = 5, random_state: int = 42) -> float:
     """5-fold stratified KNN accuracy on a representation ``rep``."""
