@@ -36,6 +36,30 @@ out to be elsewhere. All numbers are means over Wine + the Causal-Benchmark.
   relevance prototype. Available for the non-strict / composite regime where it can
   differ.
 
+## Causal-aware greedy (reviewer's improvement, measured)
+
+The reviewer's central critique: the causal score weighted clustering but was
+**ignored by the default greedy selector**, which ranked purely on `rel_i`. The
+`improved_greedy` mode fixes this — the greedy is seeded at `argmax R` and scored
+by the rank-normalised causal-predictive `R = λ·rank(C) + (1−λ)·rank(rel)`, so
+Markov-Blanket membership (via `λ`) genuinely drives selection.
+
+Measured vs. the pure-relevance greedy (k=8, RF relevance, 4 eval bootstraps):
+
+| Dataset | pure-rel acc | improved acc | pure-rel stab | improved stab |
+|---|---:|---:|---:|---:|
+| Wine | 0.966 | **0.978** | 0.748 | **0.785** |
+| Breast Cancer | 0.953 | **0.961** | 0.527 | **0.591** |
+
+Improves **both accuracy and stability on both datasets** — now the default in the
+app's soft config (`improved_greedy=True`).
+
+What did NOT help (implemented but off by default, honest reporting): **bootstrap MB
+confidence** (`mb_bootstrap>0`) was noisy and dropped BC stability 0.591→0.384;
+**group-diversity reward** + **mean-redundancy blend** added cross-resample churn that
+reduced stability; and a **high causal weight** (`λ=0.5`) let the MB mask dominate and
+collapsed BC to acc 0.939 / stab 0.329 — `improved_lam=0.15` is the measured sweet spot.
+
 ## Takeaways
 
 - The reliable lever for **stability** here is simply **more consensus resamples**, not

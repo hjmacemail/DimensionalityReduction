@@ -26,6 +26,7 @@ from .clustering import (
     average_linkage_labels,
     composite_score,
     greedy_select,
+    greedy_select_grouped,
     select_representatives,
 )
 from .graph import correlation_matrix
@@ -182,7 +183,9 @@ class CausalHFS:
             use_conditional=cfg.conditional_relevance,
             cond_max_set=cfg.cond_max_set,
             rf_relevance=cfg.rf_relevance,
-        ).fit(Xp, y, lam=cfg.lam)
+            mb_bootstrap=(cfg.mb_bootstrap if cfg.improved_greedy else 0),
+            rank_norm=(cfg.rank_norm or cfg.improved_greedy),
+        ).fit(Xp, y, lam=(cfg.improved_lam if cfg.improved_greedy else cfg.lam))
         R = analyzer.relevance_
         mi = analyzer.mi_
         pred = analyzer.predictive_          # mi, or conditional relevance if enabled
@@ -257,7 +260,14 @@ class CausalHFS:
         # Stage 6 - prototype selection, then map local indices back to originals.
         # ``prototype_by="relevance"`` picks the most causally-relevant cluster
         # member (Improvement #2); the default composite also weights centrality/MI.
-        if cfg.prototype_by == "greedy":
+        if cfg.prototype_by == "greedy" and cfg.improved_greedy:
+            # Improved causal-aware greedy: driven by R (causal-predictive), with
+            # max+mean redundancy and a group-diversity reward over the clusters.
+            C_c = correlation_matrix(Xp_c)
+            reps_local = greedy_select_grouped(
+                R_c, C_c, result.labels, k_eff, beta=cfg.redundancy_beta,
+                gamma=cfg.group_diversity, eta=cfg.redundancy_eta)
+        elif cfg.prototype_by == "greedy":
             # Greedy max-relevance / min-redundancy (mRMR-style) over candidates.
             C_c = correlation_matrix(Xp_c)
             reps_local = greedy_select(pred_c, C_c, k_eff, cfg.redundancy_beta)

@@ -141,3 +141,41 @@ def greedy_select(relevance: np.ndarray, corr: np.ndarray, k: int,
         selected.append(int(best_j))
         remaining.discard(best_j)
     return selected if return_order else sorted(selected)
+
+
+def greedy_select_grouped(R: np.ndarray, corr: np.ndarray, labels, k: int,
+                          beta: float = 1.0, gamma: float = 0.3, eta: float = 0.7,
+                          return_order: bool = False) -> List[int]:
+    """Causal-aware greedy selection (the reviewer's improved score).
+
+    Picks features to maximise
+        R_j  -  beta * Red(j, S)  +  gamma * Div(j, S)
+    where ``R_j`` is the (rank-normalised) causal-predictive relevance, redundancy
+    blends worst-case and average dependence
+        Red = eta * max_s |corr(j,s)| + (1-eta) * mean_s |corr(j,s)|,
+    and ``Div`` rewards representing a not-yet-covered redundancy group (cluster
+    ``labels``). Selection is seeded with ``argmax_i R_i`` so the causal score drives
+    it from the start.
+    """
+    R = np.asarray(R, dtype=float)
+    p = len(R)
+    k = int(min(k, p))
+    if p == 0 or k == 0:
+        return []
+    labels = np.asarray(labels)
+    selected = [int(np.argmax(R))]
+    covered = {int(labels[selected[0]])}
+    remaining = set(range(p)) - set(selected)
+    while len(selected) < k and remaining:
+        best_j, best = None, -np.inf
+        for j in remaining:
+            deps = [corr[j, s] for s in selected]
+            red = eta * max(deps) + (1.0 - eta) * (sum(deps) / len(deps))
+            div = gamma if int(labels[j]) not in covered else 0.0
+            sc = R[j] - beta * red + div
+            if sc > best:
+                best, best_j = sc, j
+        selected.append(int(best_j))
+        covered.add(int(labels[best_j]))
+        remaining.discard(best_j)
+    return selected if return_order else sorted(selected)

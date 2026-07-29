@@ -141,18 +141,50 @@ def mutual_information(
     return mi / m if m > 0 else mi
 
 
-def causal_relevance(
-    mb_mask: np.ndarray, mi: np.ndarray, lam: float
-) -> np.ndarray:
-    """Causal-relevance score of Eq. (1):  R_i = lam*C_i + (1-lam)*MI(f_i, Y).
+def rank_normalize(x: np.ndarray) -> np.ndarray:
+    """Percentile-rank normalise to [0, 1]: (rank-1)/(p-1). Robust to heavy tails."""
+    x = np.asarray(x, dtype=float)
+    p = len(x)
+    if p <= 1:
+        return np.zeros(p)
+    order = np.argsort(np.argsort(x))          # ranks 0..p-1
+    return order.astype(float) / (p - 1)
 
-    The second term is the "predictive association" component. By default it is the
-    marginal mutual information, but the framework may pass a *conditional*
-    relevance vector instead (see :func:`conditional_relevance_scores`).
+
+def mb_bootstrap_confidence(X: np.ndarray, y: np.ndarray, n_boot: int = 6,
+                            alpha: float = 0.05, max_cond_set: int = 3,
+                            random_state: int = 0) -> np.ndarray:
+    """Bootstrap Markov-Blanket confidence: C_i = fraction of resamples with i in MB(Y).
+
+    Replaces the brittle binary membership (a feature that narrowly passes/fails one
+    CI test gets 1/0) with a stability score in [0, 1] estimated over ``n_boot``
+    row-resamples.
     """
-    C = np.asarray(mb_mask, dtype=float)  # binary causal-priority scores
-    mi = np.asarray(mi, dtype=float)
-    return lam * C + (1.0 - lam) * mi
+    X = np.asarray(X, dtype=float)
+    n, p = X.shape
+    rng = np.random.default_rng(random_state)
+    counts = np.zeros(p)
+    for _ in range(max(1, n_boot)):
+        idx = rng.integers(0, n, size=n)
+        mb = iamb_markov_blanket(X[idx], np.asarray(y)[idx], alpha, max_cond_set)
+        counts[list(mb)] += 1.0
+    return counts / max(1, n_boot)
+
+
+def causal_relevance(
+    mb_mask: np.ndarray, mi: np.ndarray, lam: float, rank_norm: bool = False
+) -> np.ndarray:
+    """Causal-relevance score of Eq. (1):  R_i = lam*C_i + (1-lam)*rel_i.
+
+    ``mb_mask`` may be binary MB membership or a continuous bootstrap confidence.
+    With ``rank_norm=True`` both terms are percentile-rank normalised before blending
+    so incomparable scales (e.g. RF importance vs. MB confidence) combine sensibly.
+    """
+    C = np.asarray(mb_mask, dtype=float)
+    rel = np.asarray(mi, dtype=float)
+    if rank_norm:
+        C, rel = rank_normalize(C), rank_normalize(rel)
+    return lam * C + (1.0 - lam) * rel
 
 
 def conditional_relevance_scores(
@@ -205,7 +237,8 @@ class CausalAnalyzer:
     def __init__(self, alpha: float = 0.05, max_cond_set: int = 3,
                  discrete_target: bool = True, random_state: int = 0,
                  use_conditional: bool = False, cond_max_set: int = 12,
-                 rf_relevance: bool = False) -> None:
+                 rf_relevance: bool = False, mb_bootstrap: int = 0,
+                 rank_norm: bool = False) -> None:
         self.alpha = alpha
         self.max_cond_set = max_cond_set
         self.discrete_target = discrete_target
@@ -213,6 +246,8 @@ class CausalAnalyzer:
         self.use_conditional = use_conditional
         self.cond_max_set = cond_max_set
         self.rf_relevance = rf_relevance
+        self.mb_bootstrap = mb_bootstrap      # >0 -> continuous MB confidence
+        self.rank_norm = rank_norm            # rank-normalise before blending
         self.mb_: List[int] = []
         self.mb_mask_: np.ndarray | None = None
         self.mi_: np.ndarray | None = None
@@ -226,6 +261,16 @@ class CausalAnalyzer:
         mask = np.zeros(p, dtype=float)
         mask[self.mb_] = 1.0
         self.mb_mask_ = mask
+        # Causal-priority score C: bootstrap MB confidence in [0,1] if requested,
+        # otherwise brittle binary membership.
+        if self.mb_bootstrap and self.mb_bootstrap > 0:
+            self.mb_confidence_ = mb_bootstrap_confidence(
+                X, y, n_boot=self.mb_bootstrap, alpha=self.alpha,
+                max_cond_set=self.max_cond_set, random_state=self.random_state)
+            C = self.mb_confidence_
+        else:
+            self.mb_confidence_ = mask
+            C = mask
         self.mi_ = mutual_information(X, y, self.discrete_target, self.random_state)
         if self.rf_relevance:
             self.cond_rel_ = rf_relevance_scores(X, y, self.discrete_target, self.random_state)
@@ -235,5 +280,5 @@ class CausalAnalyzer:
             self.predictive_ = self.cond_rel_
         else:
             self.predictive_ = self.mi_
-        self.relevance_ = causal_relevance(mask, self.predictive_, lam)
+        self.relevance_ = causal_relevance(C, self.predictive_, lam, rank_norm=self.rank_norm)
         return self
