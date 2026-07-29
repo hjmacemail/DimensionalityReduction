@@ -53,6 +53,14 @@ METHOD_ORDER = ["Proposed"] + list(BASELINES)
 HIGHER_BETTER = ("accuracy", "stability", "trustworthiness")
 
 
+def st_show(fig, **kwargs):
+    """Render a matplotlib figure, then close it so figures don't accumulate in
+    memory across Streamlit reruns (a common cause of gradual out-of-memory crashes)."""
+    import matplotlib.pyplot as plt
+    st.pyplot(fig, **kwargs)
+    plt.close(fig)
+
+
 # --------------------------------------------------------------------------- #
 # Dataset catalogue (offline sklearn built-ins + synthetic + UCI/OpenML)
 # --------------------------------------------------------------------------- #
@@ -69,21 +77,39 @@ def _sklearn_builtin(loader_name, name, n_classes, mf=120, ms=600):
 
 
 def _olivetti_faces():
-    """Olivetti faces — 400 photos, 4096 pixels (kept to the 1200 highest-variance)."""
+    """Olivetti faces — 400 photos, 4096 pixels (kept to the 900 highest-variance)."""
+    import gc
+    import numpy as np
     from sklearn.datasets import fetch_olivetti_faces
     d = fetch_olivetti_faces()
-    X, y, names = apply_common_schema(d.data, d.target, None, max_features=1200, max_samples=600)
+    X = np.ascontiguousarray(d.data, dtype=np.float32)
+    yv = np.asarray(d.target, dtype=int)
+    del d
+    gc.collect()
+    X, y, names = apply_common_schema(X, yv, None, max_features=900, max_samples=400)
     return Dataset("Olivetti Faces", X, y, names, 40)
 
 
 def _mnist_784():
-    """MNIST handwritten digits — 784 pixels, sub-sampled to 700 rows."""
+    """MNIST handwritten digits — 784 pixels, sub-sampled to 500 rows.
+
+    ``fetch_openml`` loads the full 70 000×784 array (~440 MB in float64). To avoid
+    an out-of-memory crash on memory-limited hosts we sub-sample and downcast to
+    float32 immediately, then free the full array before any downstream work.
+    """
+    import gc
     import numpy as np
     from sklearn.datasets import fetch_openml
     d = fetch_openml("mnist_784", version=1, as_frame=False, parser="auto")
-    X, y, names = apply_common_schema(np.asarray(d.data, dtype=float),
-                                      np.asarray(d.target, dtype=int), None,
-                                      max_features=784, max_samples=700)
+    Xfull = np.asarray(d.data)
+    yfull = np.asarray(d.target, dtype=int)
+    rng = np.random.default_rng(42)
+    idx = rng.choice(Xfull.shape[0], size=min(500, Xfull.shape[0]), replace=False)
+    X = np.ascontiguousarray(Xfull[idx], dtype=np.float32)
+    yv = yfull[idx]
+    del d, Xfull, yfull
+    gc.collect()
+    X, y, names = apply_common_schema(X, yv, None, max_features=784, max_samples=500)
     return Dataset("MNIST", X, y, names, 10)
 
 
@@ -98,9 +124,9 @@ CATALOGUE = {
 for _nm in DATASET_REGISTRY:
     CATALOGUE[f"{_nm} (UCI)"] = ((lambda n=_nm: load_dataset(n)), not DATASET_REGISTRY[_nm].offline)
 # Well-known high-dimensional real datasets (> 500 features; need download).
-CATALOGUE["Isolet (617 feat)"] = ((lambda: load_dataset("Isolet", max_features=617, max_samples=600)), True)
+CATALOGUE["Isolet (617 feat)"] = ((lambda: load_dataset("Isolet", max_features=617, max_samples=500)), True)
 CATALOGUE["MNIST digits (784 feat)"] = (_mnist_784, True)
-CATALOGUE["Olivetti Faces (1200 feat)"] = (_olivetti_faces, True)
+CATALOGUE["Olivetti Faces (900 feat)"] = (_olivetti_faces, True)
 
 OFFLINE_DEFAULTS = ["Wine (sklearn)", "Breast Cancer (sklearn)"]
 
@@ -114,8 +140,8 @@ _UCI_SHAPES = {
 DATASET_META = {
     "Iris (sklearn)": (150, 4), "Wine (sklearn)": (178, 13),
     "Breast Cancer (sklearn)": (569, 30), "Digits (sklearn)": (600, 64),
-    "Isolet (617 feat)": (600, 617), "MNIST digits (784 feat)": (700, 784),
-    "Olivetti Faces (1200 feat)": (400, 1200),
+    "Isolet (617 feat)": (500, 617), "MNIST digits (784 feat)": (500, 784),
+    "Olivetti Faces (900 feat)": (400, 900),
 }
 for _nm in DATASET_REGISTRY:
     if _nm in _UCI_SHAPES:
@@ -1070,8 +1096,8 @@ with tab_exp:
             with cc1:
                 if sel_labels:
                     st.caption("Bars = mean · whiskers = std")
-                    st.pyplot(metric_bars(mean_full[sel_labels], std_full[sel_labels], sel_labels),
-                              use_container_width=False)
+                    st_show(metric_bars(mean_full[sel_labels], std_full[sel_labels], sel_labels),
+                            use_container_width=False)
             with cc2:
                 if len(methods_used) >= 2:
                     axis_opts = list(axis_mean.columns)
@@ -1086,8 +1112,8 @@ with tab_exp:
                     else:
                         valid = axis_mean[[x_label, y_label]].dropna().index.tolist()
                         if len(valid) >= 2:
-                            st.pyplot(pareto_scatter(axis_mean.loc[valid], axis_std.loc[valid],
-                                                     x_label, y_label), use_container_width=False)
+                            st_show(pareto_scatter(axis_mean.loc[valid], axis_std.loc[valid],
+                                                   x_label, y_label), use_container_width=False)
                             st.caption("Green = Pareto-optimal · red = Proposed.")
                         else:
                             st.info("Causal metrics need a ground-truth dataset (synthetic only).")
@@ -1112,7 +1138,7 @@ with tab_exp:
                 st.markdown("#### Heatmap")
                 hm_metric = st.selectbox("Metric", selected_metrics,
                                          format_func=lambda m: METRIC_LABELS[m], key="hm_metric")
-                st.pyplot(metric_heatmap(per_ds, hm_metric), use_container_width=False)
+                st_show(metric_heatmap(per_ds, hm_metric), use_container_width=False)
                 if n_ds >= 3 and "Proposed" in methods_used:
                     st.markdown("#### Statistical significance")
                     acc_mat = per_ds.pivot(index="dataset", columns="method", values="accuracy")[methods_used]
@@ -1497,7 +1523,7 @@ with tab_sim:
         with colL:
             fig = sim_figure(step, sim)
             if fig is not None:
-                st.pyplot(fig, use_container_width=False)
+                st_show(fig, use_container_width=False)
         with colR:
             st.markdown("**👀 What to notice**")
             st.info(note.get("notice", ""))
@@ -1625,4 +1651,4 @@ with tab_hitl:
                 fig = causal_dendrogram(model.distance_matrix_, model.relevance_, names,
                                         selected=model.selected_features_,
                                         title="Causal dendrogram (bold = selected)")
-                st.pyplot(fig)
+                st_show(fig)
