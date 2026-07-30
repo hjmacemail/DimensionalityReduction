@@ -16,6 +16,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import numpy as np
@@ -528,8 +529,15 @@ def render_full_report(df, meta):
     ds_names = list(df["dataset"].unique())
     n_ds = len(ds_names)
     nseeds = df["seed"].nunique() if "seed" in df.columns else 1
-    st.success(f"Benchmarked **{n_ds} datasets × {len(methods_used)} methods × "
-               f"{nseeds} seed(s)** in {meta['secs']:.0f}s.")
+    if meta.get("bundled"):
+        st.success(f"Precomputed report — **{n_ds} datasets × {len(methods_used)} methods × "
+                   f"{nseeds} seed(s)**.")
+        st.caption("Bundled sample computed offline on the sklearn datasets (Iris, Wine, "
+                   "Breast Cancer, Digits). Run the full benchmark above for the online "
+                   "and high-dimensional datasets too.")
+    else:
+        st.success(f"Benchmarked **{n_ds} datasets × {len(methods_used)} methods × "
+                   f"{nseeds} seed(s)** in {meta['secs']:.0f}s.")
     for disp, err in meta.get("skipped", []):
         st.warning(f"Skipped **{disp}** — {err} (online datasets need internet).")
     if "k" in df.columns:
@@ -1353,8 +1361,22 @@ with tab_report:
     fb_seeds = fc2.slider("Repetitions (random seeds)", 1, 5, 1, 1, key="fb_seeds",
                           help="Repeat every run with a different seed for mean ± std. "
                                "Keep at 1 for the fastest full sweep.")
-    run_full = st.button("▶ Run full benchmark (all datasets)", type="primary",
-                         key="fb_run", use_container_width=True)
+    rc1, rc2 = st.columns(2)
+    run_full = rc1.button("▶ Run full benchmark (all datasets)", type="primary",
+                          key="fb_run", use_container_width=True)
+    _bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "results", "full_benchmark_results.csv")
+    load_bundled = rc2.button("📂 Load bundled sample report", key="fb_bundled",
+                              use_container_width=True, disabled=not os.path.exists(_bundled),
+                              help="Display a precomputed report (the offline sklearn datasets: "
+                                   "Iris, Wine, Breast Cancer, Digits) without a live run.")
+
+    if load_bundled and os.path.exists(_bundled):
+        bdf = pd.read_csv(_bundled)
+        st.session_state["full_df"] = bdf
+        st.session_state["full_meta"] = dict(
+            loaded=list(bdf["dataset"].unique()), skipped=[], secs=0.0, nb=4, seeds=1,
+            bundled=True)
 
     if run_full:
         allsel = list(CATALOGUE)
