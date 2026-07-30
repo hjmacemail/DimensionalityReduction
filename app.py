@@ -568,11 +568,15 @@ def render_full_report(df, meta):
     n_ds = len(ds_names)
     nseeds = df["seed"].nunique() if "seed" in df.columns else 1
     if meta.get("bundled"):
-        st.success(f"Precomputed report — **{n_ds} datasets × {len(methods_used)} methods × "
+        st.success(f"Saved report — **{n_ds} datasets × {len(methods_used)} methods × "
                    f"{nseeds} seed(s)**.")
-        st.caption("Bundled sample computed offline on the sklearn datasets (Iris, Wine, "
-                   "Breast Cancer, Digits). Run the full benchmark above for the online "
-                   "and high-dimensional datasets too.")
+        if n_ds <= 4:
+            st.caption("This is the small offline sample (sklearn datasets: Iris, Wine, "
+                       "Breast Cancer, Digits). For **all** datasets — the 10 UCI/OpenML "
+                       "sets and Isolet/MNIST/Olivetti — click **Run full benchmark** "
+                       "above (needs internet, available in the deployed app).")
+        else:
+            st.caption(f"Loaded from a saved results file covering {n_ds} datasets.")
     else:
         st.success(f"Benchmarked **{n_ds} datasets × {len(methods_used)} methods × "
                    f"{nseeds} seed(s)** in {meta['secs']:.0f}s.")
@@ -1390,8 +1394,12 @@ with tab_report:
         "Run **every dataset** in the catalogue with **auto-suggested k** (nested-CV), "
         "**all methods**, and **all metrics** — then view the report below and save it as "
         "CSV or PDF.")
-    st.caption("Online (UCI) and high-dimensional datasets need internet; any that can't "
-               "load are skipped and listed. This is a heavy run — expect a few minutes.")
+    st.caption("Only 4 datasets (Iris, Wine, Breast Cancer, Digits) load offline; the 10 "
+               "UCI/OpenML sets and Isolet/MNIST/Olivetti are **downloaded at runtime**, so "
+               "the complete all-datasets report only runs where there's internet (the "
+               "deployed app). Any set that can't load is skipped and listed. The bundled "
+               "sample below covers just the 4 offline datasets — run the full benchmark for "
+               "everything. Expect a few minutes.")
 
     fc1, fc2 = st.columns(2)
     fb_nb = fc1.slider("Bootstrap resamples (stability)", 3, 20, 8, 1, key="fb_nb",
@@ -1443,6 +1451,27 @@ with tab_report:
             st.session_state["full_meta"] = dict(
                 loaded=floaded, skipped=fskipped, secs=time.perf_counter() - t0,
                 nb=fb_nb, seeds=fb_seeds)
+            # Persist this complete run as the bundled report for this deployment
+            # session (download it below for a permanent copy to commit).
+            try:
+                os.makedirs(os.path.dirname(_bundled), exist_ok=True)
+                fdf.to_csv(_bundled, index=False)
+                bundled_pdf_bytes.clear()
+            except Exception:
+                pass
+
+    up = st.file_uploader(
+        "…or load a results CSV you exported earlier (e.g. a full run downloaded from "
+        "the deployed app)", type=["csv"], key="fb_upload")
+    if up is not None:
+        try:
+            udf = pd.read_csv(up)
+            st.session_state["full_df"] = udf
+            st.session_state["full_meta"] = dict(
+                loaded=list(udf["dataset"].unique()), skipped=[], secs=0.0, nb=8,
+                seeds=udf["seed"].nunique() if "seed" in udf.columns else 1, bundled=True)
+        except Exception as exc:
+            st.error(f"Could not read that CSV: {exc}")
 
     fdf = st.session_state.get("full_df")
     fmeta = st.session_state.get("full_meta")
