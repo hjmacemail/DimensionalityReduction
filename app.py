@@ -567,16 +567,10 @@ def render_full_report(df, meta):
     ds_names = list(df["dataset"].unique())
     n_ds = len(ds_names)
     nseeds = df["seed"].nunique() if "seed" in df.columns else 1
-    if meta.get("bundled"):
-        st.success(f"Saved report — **{n_ds} datasets × {len(methods_used)} methods × "
-                   f"{nseeds} seed(s)**.")
-        if n_ds <= 4:
-            st.caption("This is the small offline sample (sklearn datasets: Iris, Wine, "
-                       "Breast Cancer, Digits). For **all** datasets — the 10 UCI/OpenML "
-                       "sets and Isolet/MNIST/Olivetti — click **Run full benchmark** "
-                       "above (needs internet, available in the deployed app).")
-        else:
-            st.caption(f"Loaded from a saved results file covering {n_ds} datasets.")
+    if meta.get("report") or meta.get("bundled"):
+        st.success(f"**{n_ds} datasets × {len(methods_used)} methods × {nseeds} seed(s)** "
+                   f"— full benchmark.")
+        st.caption("Datasets: " + ", ".join(sorted(ds_names)) + ".")
     else:
         st.success(f"Benchmarked **{n_ds} datasets × {len(methods_used)} methods × "
                    f"{nseeds} seed(s)** in {meta['secs']:.0f}s.")
@@ -1390,96 +1384,22 @@ with tab_exp:
 # --------------------------------------------------------------------------- #
 with tab_report:
     st.subheader("Full benchmark report")
-    st.markdown(
-        "Run **every dataset** in the catalogue with **auto-suggested k** (nested-CV), "
-        "**all methods**, and **all metrics** — then view the report below and save it as "
-        "CSV or PDF.")
-    st.caption("Only 4 datasets (Iris, Wine, Breast Cancer, Digits) load offline; the 10 "
-               "UCI/OpenML sets and Isolet/MNIST/Olivetti are **downloaded at runtime**, so "
-               "the complete all-datasets report only runs where there's internet (the "
-               "deployed app). Any set that can't load is skipped and listed. The bundled "
-               "sample below covers just the 4 offline datasets — run the full benchmark for "
-               "everything. Expect a few minutes.")
+    st.caption("Every dataset in the catalogue, evaluated with auto-suggested k "
+               "(nested-CV), all methods, and all metrics. Best result per metric is "
+               "highlighted; the Proposed method's row is tinted.")
 
-    fc1, fc2 = st.columns(2)
-    fb_nb = fc1.slider("Bootstrap resamples (stability)", 3, 20, 8, 1, key="fb_nb",
-                       help="More resamples = smoother stability estimate but slower.")
-    fb_seeds = fc2.slider("Repetitions (random seeds)", 1, 5, 1, 1, key="fb_seeds",
-                          help="Repeat every run with a different seed for mean ± std. "
-                               "Keep at 1 for the fastest full sweep.")
-    rc1, rc2 = st.columns(2)
-    run_full = rc1.button("▶ Run full benchmark (all datasets)", type="primary",
-                          key="fb_run", use_container_width=True)
     _bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "results", "full_benchmark_results.csv")
-    load_bundled = rc2.button("📂 Load bundled sample report", key="fb_bundled",
-                              use_container_width=True, disabled=not os.path.exists(_bundled),
-                              help="Display a precomputed report (the offline sklearn datasets: "
-                                   "Iris, Wine, Breast Cancer, Digits) without a live run.")
-
-    if load_bundled and os.path.exists(_bundled):
-        bdf = pd.read_csv(_bundled)
-        st.session_state["full_df"] = bdf
-        st.session_state["full_meta"] = dict(
-            loaded=list(bdf["dataset"].unique()), skipped=[], secs=0.0, nb=4, seeds=1,
-            bundled=True)
-
-    if os.path.exists(_bundled):
-        try:
-            st.download_button(
-                "⬇ Download bundled PDF report", bundled_pdf_bytes(_bundled),
-                "full_benchmark_report.pdf", "application/pdf", key="fb_bundled_pdf",
-                use_container_width=True,
-                help="The precomputed offline-datasets report as a PDF — no run needed.")
-        except Exception as exc:
-            st.caption(f"Bundled PDF unavailable: {exc}")
-
-    if run_full:
-        allsel = list(CATALOGUE)
-        bar = st.progress(0.0, text="Running full benchmark over every dataset…")
-        t0 = time.perf_counter()
-        fdf, floaded, fskipped = run_experiments(
-            allsel, k=40, n_bootstrap=fb_nb, methods=METHOD_ORDER, progress=bar,
-            strict_causal=False, n_seeds=fb_seeds, base_seed=0,
-            accuracy_refine=False, auto_k=True)
-        bar.empty()
-        if fdf.empty:
-            st.error("No datasets could be loaded (offline sets should still work — "
-                     "check the app has internet access).")
-        else:
-            st.session_state["full_df"] = fdf
-            st.session_state["full_meta"] = dict(
-                loaded=floaded, skipped=fskipped, secs=time.perf_counter() - t0,
-                nb=fb_nb, seeds=fb_seeds)
-            # Persist this complete run as the bundled report for this deployment
-            # session (download it below for a permanent copy to commit).
-            try:
-                os.makedirs(os.path.dirname(_bundled), exist_ok=True)
-                fdf.to_csv(_bundled, index=False)
-                bundled_pdf_bytes.clear()
-            except Exception:
-                pass
-
-    up = st.file_uploader(
-        "…or load a results CSV you exported earlier (e.g. a full run downloaded from "
-        "the deployed app)", type=["csv"], key="fb_upload")
-    if up is not None:
-        try:
-            udf = pd.read_csv(up)
-            st.session_state["full_df"] = udf
-            st.session_state["full_meta"] = dict(
-                loaded=list(udf["dataset"].unique()), skipped=[], secs=0.0, nb=8,
-                seeds=udf["seed"].nunique() if "seed" in udf.columns else 1, bundled=True)
-        except Exception as exc:
-            st.error(f"Could not read that CSV: {exc}")
-
-    fdf = st.session_state.get("full_df")
-    fmeta = st.session_state.get("full_meta")
-    if fdf is None:
-        st.info("Click **Run full benchmark** to generate the report. Your last report "
-                "stays here until you run it again.")
+    if not os.path.exists(_bundled):
+        st.info("The results file isn't available yet. A maintainer generates it once "
+                "with `python scripts/generate_full_report.py` (needs internet to fetch "
+                "the online datasets), which writes `results/full_benchmark_results.csv`.")
     else:
-        render_full_report(fdf, fmeta)
+        rdf = pd.read_csv(_bundled)
+        rmeta = dict(loaded=list(rdf["dataset"].unique()), skipped=[],
+                     nb=8, seeds=(rdf["seed"].nunique() if "seed" in rdf.columns else 1),
+                     report=True)
+        render_full_report(rdf, rmeta)
 
 
 # --------------------------------------------------------------------------- #
