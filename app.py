@@ -523,6 +523,44 @@ def build_pdf_report(mean_df, std_df, text_df, per_ds, ds_names, sel_labels,
     return buf.getvalue()
 
 
+def report_pdf_bytes(df, nb=4, seeds=1):
+    """Compute the report aggregates from a results DataFrame and return PDF bytes."""
+    methods_used = [m for m in METHOD_ORDER if m in df["method"].unique()]
+    ds_names = list(df["dataset"].unique())
+    per_ds = (df.groupby(["dataset", "method"], as_index=False)
+              [CORE_METRICS + ["causal_plausibility", "causal_recall"]].mean())
+    mean_full, text_full = mean_std_tables(df, CORE_METRICS, methods_used)
+    std_full = df.groupby("method")[CORE_METRICS].std().reindex(methods_used).fillna(0.0)
+    std_full.columns = [METRIC_LABELS[c] for c in CORE_METRICS]
+    sel_labels = [METRIC_LABELS[m] for m in CORE_METRICS]
+    acc_col, stab_col = METRIC_LABELS["accuracy"], METRIC_LABELS["stability"]
+    bullets = []
+    for lbl in sel_labels:
+        lower = "runtime" in lbl.lower()
+        bm = mean_full[lbl].idxmin() if lower else mean_full[lbl].idxmax()
+        bullets.append(f"**{lbl}**: {bm} ({mean_full.loc[bm, lbl]:.3f})")
+    pareto = []
+    for m in mean_full.index:
+        dom = any((mean_full.loc[o, acc_col] >= mean_full.loc[m, acc_col]) and
+                  (mean_full.loc[o, stab_col] >= mean_full.loc[m, stab_col]) and (o != m) and
+                  (mean_full.loc[o, acc_col] > mean_full.loc[m, acc_col] or
+                   mean_full.loc[o, stab_col] > mean_full.loc[m, stab_col])
+                  for o in mean_full.index)
+        if not dom:
+            pareto.append(m)
+    cfg = {"datasets": ds_names, "methods": methods_used, "k": "auto (nested-CV)",
+           "bootstrap_resamples": nb, "seeds": list(range(seeds)), "strict_causal_mode": False}
+    return build_pdf_report(mean_full, std_full, text_full, per_ds, ds_names, sel_labels,
+                            cfg, bullets, pareto, methods_used, CORE_METRICS,
+                            axis_mean=mean_full, axis_std=std_full)
+
+
+@st.cache_data(show_spinner=False)
+def bundled_pdf_bytes(path):
+    """Build (once, cached) the bundled report PDF from the committed results CSV."""
+    return report_pdf_bytes(pd.read_csv(path))
+
+
 def render_full_report(df, meta):
     """Render the full-benchmark report (summary, tables, charts) + save buttons."""
     methods_used = [m for m in METHOD_ORDER if m in df["method"].unique()]
@@ -1377,6 +1415,16 @@ with tab_report:
         st.session_state["full_meta"] = dict(
             loaded=list(bdf["dataset"].unique()), skipped=[], secs=0.0, nb=4, seeds=1,
             bundled=True)
+
+    if os.path.exists(_bundled):
+        try:
+            st.download_button(
+                "⬇ Download bundled PDF report", bundled_pdf_bytes(_bundled),
+                "full_benchmark_report.pdf", "application/pdf", key="fb_bundled_pdf",
+                use_container_width=True,
+                help="The precomputed offline-datasets report as a PDF — no run needed.")
+        except Exception as exc:
+            st.caption(f"Bundled PDF unavailable: {exc}")
 
     if run_full:
         allsel = list(CATALOGUE)
