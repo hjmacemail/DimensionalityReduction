@@ -160,6 +160,9 @@ def select_k_nested(X, y, k_grid=None, k_max=None, n_splits=5, n_repeats=3,
     # Default k_max: min(p, 100, n/10) — guards small-n, large-p overfitting.
     if k_max is None:
         k_max = int(max(2, min(p, 100, n // 10)))
+    # Never let auto-k select ALL features: at k = p every method keeps everything,
+    # so the comparison degenerates (all methods tie). Cap strictly below p.
+    k_max = int(min(k_max, max(2, p - 1)))
     if k_grid is None:
         base = list(range(1, min(20, k_max) + 1))
         base += [k for k in (25, 30, 40, 50, 75, 100) if k <= k_max]

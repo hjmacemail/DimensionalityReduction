@@ -84,6 +84,8 @@ CATALOGUE = [
     ("Digits (sklearn)", lambda: _sklearn("load_digits", "Digits", 10)),
 ]
 for _nm in DATASET_REGISTRY:
+    if _nm in ("Wine", "Breast Cancer"):
+        continue  # sklearn-backed in the registry — exact duplicates of the offline entries
     CATALOGUE.append((f"{_nm} (UCI)", (lambda n=_nm: load_dataset(n))))
 CATALOGUE += [
     ("Isolet (617 feat)", lambda: load_dataset("Isolet", max_features=617, max_samples=500)),
