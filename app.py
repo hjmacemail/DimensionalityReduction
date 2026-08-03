@@ -683,8 +683,11 @@ def run_simulation(X, y, names, k, strict, true_relevant=None):
                               mb_max_cond_set=5, conditional_relevance=True,
                               prototype_by="relevance", prefilter_top=150, lam=0.7, alpha=0.4)
     else:
+        # Default pipeline: soft mode + causal-aware greedy selection (matches the
+        # Experiments tab), so the simulation shows the algorithm as actually run.
         cfg = FrameworkConfig(n_representatives=k, n_bootstrap=8, mb_max_cond_set=3,
-                              prefilter_top=150)
+                              rf_relevance=True, prototype_by="greedy",
+                              improved_greedy=True, prefilter_top=150)
     model = CausalHFS(cfg).fit(X, y)
     Xp = Preprocessor().fit_transform(X)
     cand = model.candidate_features_ or list(range(X.shape[1]))
@@ -725,8 +728,13 @@ def sim_data_preview(step, sim, nrows=5):
         return (tbl(Xr, range(Xr.shape[1])), "Raw dataset (sample rows)",
                 tbl(Xp, range(Xp.shape[1])), "After z-scoring (μ=0, σ=1)")
     if step == 2:
+        if len(cand) < Xp.shape[1]:
+            rlab = f"After: restricted to {len(cand)} Markov-Blanket candidates (strict mode)"
+        else:
+            rlab = (f"Markov Blanket found; all {len(cand)} features kept as candidates "
+                    f"(the blanket weights relevance R̃ rather than dropping columns)")
         return (tbl(Xp, range(Xp.shape[1])), f"All {Xp.shape[1]} standardised features",
-                tbl(Xp, cand), f"After: {len(cand)} causal candidates kept (Markov Blanket)")
+                tbl(Xp, cand), rlab)
     if step == 3:
         cn = [str(names[c]) for c in cand][:8]
         cdf = pd.DataFrame(np.round(sim["corr"][:8, :8], 2), index=cn, columns=cn)
@@ -829,11 +837,12 @@ def sim_figure(step, sim):
         cb = fig.colorbar(im, ax=ax, shrink=0.7); cb.ax.tick_params(labelsize=6)
         fig.tight_layout(); return fig
 
-    if step in (5, 6):  # dendrogram; step 6 highlights selected representatives
+    if step in (5, 6):  # dendrogram; step 6 highlights the greedily-selected features
         sel_local = [cand.index(f) for f in m.selected_features_ if f in cand] if step == 6 else []
         fig = causal_dendrogram(m.distance_matrix_, R[cand], cand_names,
                                 selected=sel_local,
-                                title=("Clusters" if step == 5 else "Selected representatives (bold)"))
+                                title=("Redundancy clusters" if step == 5
+                                       else "Greedily selected features (bold)"))
         return fig
 
     if step == 7:  # consensus frequency
@@ -1569,8 +1578,10 @@ LEARNER_NOTES = {
         "plain": "We look for the target's **Markov Blanket** — the small set of features that, "
                  "once known, make everything else irrelevant for predicting it. Think of it as "
                  "the target's immediate family: its direct causes and effects.",
-        "notice": "Gold bars are the Markov-Blanket features. In causal mode we keep only these, "
-                  "so the column count drops on the right.",
+        "notice": "Gold bars are the Markov-Blanket features. Their causal priority is "
+                  "rank-blended with a predictive score to rank every feature (R̃). In the "
+                  "default soft mode all features stay as candidates; strict causal mode keeps "
+                  "only the blanket, so the column count drops.",
         "why": "This focuses the pipeline on genuine drivers rather than look-alike (spurious) "
                "features."},
     3: {"goal": "Map which features carry the same information.",
@@ -1591,15 +1602,23 @@ LEARNER_NOTES = {
                  "similar features.",
         "notice": "Features that merge low on the tree are near-duplicates; branches that join "
                   "high up are quite different.",
-        "why": "Each surviving branch becomes one 'slot' in the reduced dataset."},
-    6: {"goal": "Pick one spokesperson per group.",
-        "plain": "From each group we keep the single most informative, causally-relevant feature "
-                 "and drop the rest. This is the actual dimensionality reduction — and every kept "
-                 "column is still a real, named feature.",
-        "notice": "Bold leaves are the chosen representatives; the table on the right now has "
+        "why": "These redundancy groups are what the next step avoids double-picking from — the "
+               "greedy selector uses them (and the raw correlations) to keep features that "
+               "don't repeat each other."},
+    6: {"goal": "Greedily pick the k best non-redundant features.",
+        "plain": "We build the kept set **one feature at a time**. Start with the most "
+                 "causally-relevant feature — the highest **R̃**, a rank-normalised blend of "
+                 "Markov-Blanket priority and Random-Forest importance — then repeatedly add "
+                 "the feature that is still relevant but **least redundant** with those already "
+                 "chosen (max-relevance / min-redundancy), until we have k. Every kept column "
+                 "is still a real, named feature. (Strict causal mode instead keeps one "
+                 "prototype per cluster.)",
+        "notice": "Bold leaves are the chosen features; the table on the right now has "
                   "only k columns.",
-        "why": "You shrink the data while keeping full interpretability — unlike PCA, which "
-               "returns blended components you can't name."},
+        "why": "Letting the causal score drive a relevance-vs-redundancy trade-off picks "
+               "genuine drivers over spurious look-alikes — this is the change that made the "
+               "method beat the baselines on both accuracy and stability. And unlike PCA, the "
+               "kept columns stay interpretable."},
     7: {"goal": "Keep only the reliably-chosen features.",
         "plain": "We repeat the whole process on many random re-samples of the data and keep the "
                  "features that get picked again and again. Consistency = trustworthiness.",
@@ -1638,7 +1657,11 @@ with tab_sim:
                            key="sim_ds", format_func=_ds_label,
                            help="Fewer features = clearer visuals.")
     sim_k = sc2.number_input("Keep k", 2, 40, 5, 1, key="sim_k")
-    sim_strict = sc3.checkbox("Causal mode", value=True, key="sim_strict")
+    sim_strict = sc3.checkbox("Strict causal mode", value=False, key="sim_strict",
+                              help="Off = the default pipeline (soft mode + causal-aware "
+                                   "greedy selection), what the Experiments tab runs. On = "
+                                   "restrict to the Markov Blanket and keep one prototype "
+                                   "per cluster.")
     if st.button("▶ Start / restart walkthrough", key="sim_run", type="primary"):
         with st.spinner("Running the pipeline…"):
             X, y, names, ncls, real_name, true_rel = load_catalogue_dataset(sim_ds)
