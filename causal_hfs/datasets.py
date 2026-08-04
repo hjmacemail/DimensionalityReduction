@@ -60,7 +60,11 @@ def apply_common_schema(
     random_state: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, List[str]]:
     """Median-impute, cap to highest-variance features, sub-sample rows."""
-    X = np.asarray(X, dtype=float)
+    # np.array (not asarray) forces a WRITABLE copy — arrays coming from a pandas
+    # DataFrame (.to_numpy) or OpenML can be read-only, which would make the in-place
+    # median imputation below raise "assignment destination is read-only" on newer
+    # numpy/pandas (as seen on Streamlit Cloud).
+    X = np.array(X, dtype=float)
     y = np.asarray(y)
     n, p = X.shape
     if feature_names is None:
