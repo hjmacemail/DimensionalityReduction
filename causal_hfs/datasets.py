@@ -187,10 +187,15 @@ def _openml(name: str, version: str | int = "active", data_id: int | None = None
     Xdf = ds.data.copy()
     Xdf = Xdf.replace("?", np.nan)
     for c in Xdf.columns:
-        if not np.issubdtype(Xdf[c].dtype, np.number):
+        # ``pd.api.types.is_numeric_dtype`` handles pandas categorical/boolean/extension
+        # dtypes gracefully; ``np.issubdtype`` raises "Cannot interpret CategoricalDtype"
+        # on the categorical columns that OpenML sets return (e.g. Zoo's true/false flags).
+        if not pd.api.types.is_numeric_dtype(Xdf[c]):
             Xdf[c] = pd.factorize(Xdf[c])[0].astype(float)
+        else:
+            Xdf[c] = Xdf[c].astype(float)
     X = Xdf.to_numpy(dtype=float)
-    _, y = np.unique(ds.target.to_numpy(), return_inverse=True)
+    _, y = np.unique(np.asarray(ds.target), return_inverse=True)
     return X, y, list(Xdf.columns)
 
 
