@@ -1104,7 +1104,14 @@ with tab_exp:
                 auto_k=auto_k)
             bar.empty()
             if df.empty:
-                st.error("No datasets could be loaded. UCI sets need internet access.")
+                st.error("No datasets could be loaded.")
+                if skipped:
+                    st.caption("Why each was skipped:")
+                    for disp, err in skipped:
+                        st.write(f"• **{disp}** — {err}")
+                st.caption("Offline sklearn sets (Iris, Wine, Breast Cancer, Digits) always "
+                           "work. UCI/high-dim sets are fetched from OpenML at runtime; a few "
+                           "(Zoo, Crowdsourced, Arrhythmia, Musk) can fail to resolve there.")
             else:
                 st.session_state["exp_df"] = df
                 st.session_state["exp_meta"] = dict(

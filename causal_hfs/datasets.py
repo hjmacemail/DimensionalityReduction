@@ -155,11 +155,31 @@ def _sklearn_breast_cancer():
     return _from_sklearn(load_breast_cancer)
 
 
-def _openml(name: str, version: str | int = "active"):
-    """Fetch a dataset from OpenML (returns X, y, names) or raise."""
+def _openml(name: str, version: str | int = "active", data_id: int | None = None):
+    """Fetch a dataset from OpenML (returns X, y, names) or raise.
+
+    Tries, in order: an explicit numeric ``data_id`` (most reliable), then the name
+    at the requested version, then name+version=1, then just the name. Some datasets
+    fail to resolve under the "active" version but load fine at version 1, so the
+    fallbacks make the online catalogue more robust.
+    """
     from sklearn.datasets import fetch_openml
 
-    ds = fetch_openml(name=name, version=version, as_frame=True, parser="auto")
+    attempts = []
+    if data_id is not None:
+        attempts.append({"data_id": data_id})
+    attempts += [{"name": name, "version": version},
+                 {"name": name, "version": 1},
+                 {"name": name}]
+    ds, last_exc = None, None
+    for kw in attempts:
+        try:
+            ds = fetch_openml(as_frame=True, parser="auto", **kw)
+            break
+        except Exception as exc:  # try the next resolution strategy
+            last_exc = exc
+    if ds is None:
+        raise RuntimeError(f"OpenML fetch failed for '{name}': {last_exc}")
     Xdf = ds.data.copy()
     Xdf = Xdf.replace("?", np.nan)
     for c in Xdf.columns:
