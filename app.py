@@ -29,7 +29,7 @@ from causal_hfs.causal import CausalAnalyzer
 from causal_hfs.clustering import agglomerate
 from causal_hfs.distance import hybrid_distance
 from causal_hfs.graph import build_feature_graph, graph_centrality, correlation_matrix
-from causal_hfs.hitl import find_ambiguous_merges, rule_based_oracle
+from causal_hfs.hitl import find_ambiguous_merges, rule_based_oracle, HITLSession
 from causal_hfs.preprocessing import Preprocessor
 from causal_hfs.evaluation import (
     evaluate_method,
@@ -1780,7 +1780,20 @@ with tab_sim:
 # TAB 4 — Human-in-the-Loop
 # --------------------------------------------------------------------------- #
 with tab_hitl:
-    st.subheader("Review causally ambiguous merges (Section 4.3)")
+    st.subheader("The Human-in-the-Loop interface (Section 4.3)")
+    st.markdown(
+        "For a selected dataset and hybrid-distance parameter **α**, the interface surfaces the "
+        "hierarchical merge candidates flagged as potentially ambiguous. For each candidate it "
+        "shows the two clusters, their hybrid-distance values, the difference in estimated "
+        "relevance scores, and a warning when the clusters exhibit **conflicting structural "
+        "roles**. A domain expert may approve or reject each merge, and the decision is folded "
+        "back into the clustering and the final feature selection.")
+    st.caption("In these experiments the decisions are **simulated by a rule-based oracle** that "
+               "emulates expert judgement from causal heuristics (veto a merge when the clusters "
+               "have conflicting Markov-Blanket roles or a large relevance gap). The **veto rate** "
+               "is rejected consulted merges ÷ total consulted merges — it measures simulated "
+               "intervention behaviour and is *not* validation with real experts. The same "
+               "interface supports future studies with human experts.")
     hc1, hc2, hc3, hc4 = st.columns(4)
     h_dataset = hc1.selectbox("Dataset", [n for n in CATALOGUE if "(sklearn)" in n],
                               format_func=_ds_label)
@@ -1817,9 +1830,36 @@ with tab_hitl:
         def _fmt(c):
             return ", ".join(names[i] for i in c)
 
+        if ctx["flagged"]:
+            # Rule-based oracle simulation (the paper's automated evaluation): resolve
+            # every consulted merge with the oracle and report the veto rate.
+            oracle_decisions = {mm.step: oracle(mm) for mm in ctx["flagged"]}
+            n_consulted = len(ctx["flagged"])
+            n_veto = sum(1 for d in oracle_decisions.values() if not d)
+            veto_rate = n_veto / n_consulted if n_consulted else 0.0
+            with st.expander("🤖 Rule-based oracle simulation — consulted merges & veto rate",
+                             expanded=True):
+                sv1, sv2, sv3 = st.columns(3)
+                sv1.metric("Consulted merges", n_consulted)
+                sv2.metric("Vetoed (rejected)", n_veto)
+                sv3.metric("Veto rate", f"{veto_rate:.0%}")
+                st.dataframe([{
+                    "merge #": mm.step,
+                    "cluster A": _fmt(mm.left_cluster),
+                    "cluster B": _fmt(mm.right_cluster),
+                    "hybrid dist": round(mm.distance, 3),
+                    "competing dist": round(mm.next_distance, 3),
+                    "Δ relevance": round(mm.causal_gap, 3),
+                    "conflicting roles": "⚠ yes" if mm.conflicting_causal else "no",
+                    "oracle decision": "approve" if oracle_decisions[mm.step] else "veto",
+                } for mm in ctx["flagged"]], hide_index=True, use_container_width=True)
+                st.caption("Veto rate = rejected ÷ consulted merges. These are **simulated** "
+                           "expert decisions (rule-based oracle), not validation with real experts.")
+
         if not ctx["flagged"]:
             st.success("No ambiguous merges — the hybrid-distance criterion was decisive.")
         else:
+            st.markdown("#### Review each candidate (override the oracle if you're the expert)")
             for mrg in ctx["flagged"]:
                 with st.container(border=True):
                     a, b = st.columns([3, 1])
